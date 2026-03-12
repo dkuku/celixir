@@ -4,6 +4,10 @@ defmodule Celixir.Proto do
   Handles wrapper types, Value/Struct/ListValue, and TestAllTypes schema.
   """
 
+  alias Celixir.Proto.Codec
+  alias Celixir.Types.Duration
+  alias Celixir.Types.Timestamp
+
   @int32_min -2_147_483_648
   @int32_max 2_147_483_647
   @uint32_max 4_294_967_295
@@ -39,7 +43,9 @@ defmodule Celixir.Proto do
         "google.protobuf.ListValue",
         "google.protobuf.Any",
         "google.protobuf.Timestamp",
-        "google.protobuf.Duration"
+        "google.protobuf.Duration",
+        "google.protobuf.FieldMask",
+        "google.protobuf.Empty"
       ]
   end
 
@@ -57,7 +63,9 @@ defmodule Celixir.Proto do
     "Int64Value" => "google.protobuf.Int64Value",
     "StringValue" => "google.protobuf.StringValue",
     "UInt32Value" => "google.protobuf.UInt32Value",
-    "UInt64Value" => "google.protobuf.UInt64Value"
+    "UInt64Value" => "google.protobuf.UInt64Value",
+    "FieldMask" => "google.protobuf.FieldMask",
+    "Empty" => "google.protobuf.Empty"
   }
 
   @doc "Resolve a short type name to its fully qualified name."
@@ -133,12 +141,26 @@ defmodule Celixir.Proto do
     end
   end
 
+  defp finalize_special("google.protobuf.FieldMask", fields) do
+    case Map.get(fields, "paths") do
+      paths when is_list(paths) -> {:cel_struct, "google.protobuf.FieldMask", fields}
+      nil -> {:cel_struct, "google.protobuf.FieldMask", %{"paths" => []}}
+      _ -> {:cel_struct, "google.protobuf.FieldMask", fields}
+    end
+  end
+
+  defp finalize_special("google.protobuf.Empty", _fields) do
+    {:cel_struct, "google.protobuf.Empty", %{}}
+  end
+
   defp finalize_special("google.protobuf.Any", fields) do
     # Any{} with no type_url is an error
     if Map.get(fields, "type_url") in [nil, ""] and Map.get(fields, "value") == nil do
       {:cel_error, "invalid google.protobuf.Any: missing type_url"}
     else
-      {:cel_struct, "google.protobuf.Any", fields}
+      # Auto-unpack Any when created directly: Any{type_url: ..., value: binary}
+      # becomes the unpacked inner message (CEL spec behavior)
+      unpack_any(fields)
     end
   end
 
@@ -149,6 +171,16 @@ defmodule Celixir.Proto do
     end
   end
 
+  @doc "Attempt to unpack an Any struct's fields to its inner message."
+  def unpack_any(%{"type_url" => type_url, "value" => _value} = fields) when is_binary(type_url) and type_url != "" do
+    case Codec.unpack(fields) do
+      {:ok, unpacked} -> unpacked
+      {:error, _} -> {:cel_struct, "google.protobuf.Any", fields}
+    end
+  end
+
+  def unpack_any(fields), do: {:cel_struct, "google.protobuf.Any", fields}
+
   @doc "Finalize a proto message with schema validation."
   def finalize_message(type_name, fields, schema) do
     validated =
@@ -157,6 +189,10 @@ defmodule Celixir.Proto do
           nil ->
             # Accept unknown fields (e.g., reserved keyword field name tests)
             {:cont, {:ok, Map.put(acc, field_name, value)}}
+
+          {:message, "google.protobuf.Any"} ->
+            {:ok, v} = pack_for_any(value, type_name)
+            {:cont, {:ok, Map.put(acc, field_name, v)}}
 
           field_spec ->
             case validate_field(field_spec, value) do
@@ -183,6 +219,11 @@ defmodule Celixir.Proto do
     end
   end
 
+  # Null is not allowed for scalar proto fields
+  defp validate_field(scalar, nil)
+       when scalar in [:int32, :int64, :uint32, :uint64, :float, :double, :bool, :string, :bytes, :enum],
+       do: {:error, "unsupported field type"}
+
   defp validate_field(:int32, {:cel_int, v}) when v >= @int32_min and v <= @int32_max, do: {:ok, {:cel_int, v}}
 
   defp validate_field(:int32, {:cel_int, _}), do: {:error, "int32 overflow"}
@@ -197,8 +238,7 @@ defmodule Celixir.Proto do
   defp validate_field(:bool, v) when is_boolean(v), do: {:ok, v}
   defp validate_field(:string, v) when is_binary(v), do: {:ok, v}
   defp validate_field(:bytes, {:cel_bytes, _} = v), do: {:ok, v}
-  defp validate_field(:enum, {:cel_int, v}) when v >= @int32_min and v <= @int32_max,
-    do: {:ok, {:cel_int, v}}
+  defp validate_field(:enum, {:cel_int, v}) when v >= @int32_min and v <= @int32_max, do: {:ok, {:cel_int, v}}
 
   defp validate_field(:enum, {:cel_int, _}), do: {:error, "enum value out of range"}
 
@@ -229,19 +269,163 @@ defmodule Celixir.Proto do
 
   defp validate_field({:wrapper, _}, v), do: {:ok, v}
 
+  # Value coercion must come before the generic {:message, _} catch-all
+  defp validate_field({:message, "google.protobuf.Value"}, v), do: {:ok, coerce_to_value(v)}
+
+  # Struct field: null is not allowed (proto semantics)
+  defp validate_field({:message, "google.protobuf.Struct"}, nil), do: {:error, "unsupported field type"}
+
+  # ListValue field: null is not allowed
+  defp validate_field({:message, "google.protobuf.ListValue"}, nil), do: {:error, "unsupported field type"}
+
   # Struct fields must have string keys
   defp validate_field({:message, "google.protobuf.Struct"}, v) when is_map(v) do
     if Enum.all?(Map.keys(v), &is_binary/1) do
       {:ok, v}
     else
-      {:error, "Struct fields must have string keys"}
+      {:error, "bad key type"}
     end
   end
 
+  defp validate_field({:message, "google.protobuf.Any"}, v), do: {:ok, pack_any_value(v)}
+
   defp validate_field({:message, _}, v), do: {:ok, v}
-  defp validate_field({:map, _, _}, v) when is_map(v), do: {:ok, v}
-  defp validate_field({:repeated, _}, v) when is_list(v), do: {:ok, v}
+
+  # Null is not allowed for map fields
+  defp validate_field({:map, _, _}, nil), do: {:error, "unsupported field type"}
+
+  defp validate_field({:map, _, val_type}, v) when is_map(v) do
+    if prune_nulls?(val_type) do
+      {:ok, Map.reject(v, fn {_k, val} -> val == nil end)}
+    else
+      {:ok, v}
+    end
+  end
+
+  # Null is not allowed for repeated fields
+  defp validate_field({:repeated, _}, nil), do: {:error, "unsupported field type"}
+
+  defp validate_field({:repeated, inner}, v) when is_list(v) do
+    if prune_nulls?(inner) do
+      {:ok, Enum.reject(v, &(&1 == nil))}
+    else
+      {:ok, v}
+    end
+  end
+
   defp validate_field(_spec, v), do: {:ok, v}
+
+  # Pack a value for an Any field, using parent_type to infer the package prefix
+  defp pack_for_any({:cel_struct, inner_type, fields} = v, parent_type) do
+    if inner_type == "google.protobuf.Any" do
+      {:ok, v}
+    else
+      # Resolve short name using parent's package context
+      resolved = resolve_type_with_package(inner_type, parent_type)
+
+      case Codec.pack(resolved, fields) do
+        {:ok, packed} -> {:ok, packed}
+        {:error, _} -> {:ok, v}
+      end
+    end
+  end
+
+  defp pack_for_any(v, _parent_type), do: {:ok, pack_any_value(v)}
+
+  # Resolve a possibly-short type name using the package prefix from a parent type
+  defp resolve_type_with_package(type_name, parent_type) do
+    if String.contains?(type_name, ".") do
+      # Already fully qualified
+      type_name
+    else
+      # Extract package from parent_type and prepend
+      package = extract_package(parent_type)
+
+      if package == nil do
+        type_name
+      else
+        "#{package}.#{type_name}"
+      end
+    end
+  end
+
+  defp extract_package(type_name) do
+    # If the parent type is also short, try to resolve it via Codec
+    if String.contains?(type_name, ".") do
+      type_name |> String.split(".") |> Enum.drop(-1) |> Enum.join(".")
+    else
+      # Try to find FQ name from the Codec module resolution
+      case Codec.resolve_module(type_name) do
+        nil ->
+          nil
+
+        mod ->
+          mod
+          |> Codec.module_full_name()
+          |> case do
+            nil -> nil
+            fq -> fq |> String.split(".") |> Enum.drop(-1) |> Enum.join(".")
+          end
+      end
+    end
+  end
+
+  # Non-struct values assigned to Any fields pass through as-is
+  # (lists, maps, primitives are stored directly per CEL dynamic dispatch)
+  defp pack_any_value(nil), do: nil
+  defp pack_any_value(v), do: v
+
+  # JSON safe integer threshold: integers beyond 2^53 become strings
+  @json_safe_int_max 9_007_199_254_740_992
+  @json_safe_int_min -9_007_199_254_740_992
+
+  @doc "Coerce a value to its JSON representation for google.protobuf.Value fields."
+  def coerce_to_value(%Duration{} = d), do: Duration.to_string(d)
+  def coerce_to_value(%Timestamp{} = t), do: Timestamp.to_string(t)
+
+  def coerce_to_value({:cel_struct, "google.protobuf.FieldMask", fields}) do
+    paths = Map.get(fields, "paths", [])
+    Enum.join(paths, ",")
+  end
+
+  def coerce_to_value({:cel_struct, "google.protobuf.Empty", _}), do: %{}
+
+  def coerce_to_value({:cel_int, v}) when v > @json_safe_int_min and v < @json_safe_int_max, do: v / 1
+
+  def coerce_to_value({:cel_int, v}), do: Integer.to_string(v)
+
+  def coerce_to_value({:cel_uint, v}) when v < @json_safe_int_max, do: v / 1
+  def coerce_to_value({:cel_uint, v}), do: Integer.to_string(v)
+
+  def coerce_to_value({:cel_bytes, bytes}), do: Base.encode64(bytes)
+
+  def coerce_to_value(v), do: v
+
+  @doc "Wrap a CEL value as a google.protobuf.Value proto representation."
+  def wrap_as_proto_value(nil), do: %{"null_value" => 0}
+  def wrap_as_proto_value(v) when is_boolean(v), do: %{"bool_value" => v}
+  def wrap_as_proto_value(v) when is_float(v), do: %{"number_value" => v}
+  def wrap_as_proto_value({:cel_int, v}), do: %{"number_value" => v / 1}
+  def wrap_as_proto_value({:cel_uint, v}), do: %{"number_value" => v / 1}
+  def wrap_as_proto_value(v) when is_binary(v), do: %{"string_value" => v}
+
+  def wrap_as_proto_value(v) when is_list(v) do
+    %{"list_value" => %{"values" => Enum.map(v, &wrap_as_proto_value/1)}}
+  end
+
+  def wrap_as_proto_value(v) when is_map(v) do
+    %{"struct_value" => %{"fields" => Map.new(v, fn {k, val} -> {k, wrap_as_proto_value(val)} end)}}
+  end
+
+  def wrap_as_proto_value(v), do: v
+
+  # Null pruning: strip nils from repeated/map fields for message types
+  # (timestamp, duration, wrappers) but NOT for Any or Value types.
+  defp prune_nulls?({:message, "google.protobuf.Any"}), do: false
+  defp prune_nulls?({:message, "google.protobuf.Value"}), do: false
+  defp prune_nulls?({:message, _}), do: true
+  defp prune_nulls?({:wrapper, _}), do: true
+  defp prune_nulls?(_), do: false
 
   @doc "Get the default value for a proto field type."
   def field_default(:int32), do: {:cel_int, 0}
@@ -362,6 +546,11 @@ defmodule Celixir.Proto do
       "repeated_bytes" => {:repeated, :bytes},
       "repeated_nested_message" => {:repeated, {:message, "NestedMessage"}},
       "repeated_nested_enum" => {:repeated, :enum},
+      "repeated_timestamp" => {:repeated, {:message, "google.protobuf.Timestamp"}},
+      "repeated_duration" => {:repeated, {:message, "google.protobuf.Duration"}},
+      "repeated_int32_wrapper" => {:repeated, {:wrapper, :int32}},
+      "repeated_any" => {:repeated, {:message, "google.protobuf.Any"}},
+      "repeated_value" => {:repeated, {:message, "google.protobuf.Value"}},
       # Map fields
       "map_int64_nested_type" => {:map, :int64, {:message, "NestedTestAllTypes"}},
       "map_bool_bool" => {:map, :bool, :bool},
@@ -381,7 +570,11 @@ defmodule Celixir.Proto do
       "map_string_string" => {:map, :string, :string},
       "map_string_float" => {:map, :string, :float},
       "map_string_double" => {:map, :string, :double},
+      "map_bool_duration" => {:map, :bool, {:message, "google.protobuf.Duration"}},
+      "map_bool_timestamp" => {:map, :bool, {:message, "google.protobuf.Timestamp"}},
+      "map_bool_int32_wrapper" => {:map, :bool, {:wrapper, :int32}},
       # Oneof fields
+      "oneof_type" => {:message, "NestedTestAllTypes"},
       "single_nested_message_oneof" => {:message, "NestedMessage"},
       "single_nested_enum_oneof" => :enum
     }

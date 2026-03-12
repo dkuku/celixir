@@ -47,6 +47,14 @@ defmodule Celixir.Types.Timestamp do
   @doc "Returns Unix epoch seconds."
   def to_unix(%__MODULE__{datetime: dt}), do: DateTime.to_unix(dt, :second)
 
+  @doc "Convert to proto representation {seconds, nanos}."
+  def to_proto(%__MODULE__{datetime: dt, nanos_remainder: nr}) do
+    us = DateTime.to_unix(dt, :microsecond)
+    seconds = div(us, 1_000_000)
+    nanos = rem(us, 1_000_000) * 1000 + nr
+    {seconds, nanos}
+  end
+
   @doc "Converts to RFC3339 string."
   def to_string(%__MODULE__{datetime: dt}) do
     # Trim trailing fractional zeros for canonical output

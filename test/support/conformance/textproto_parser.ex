@@ -423,8 +423,12 @@ defmodule Celixir.Conformance.TextprotoParser do
 
   # Known proto enum ident-to-int mappings
   @enum_ident_values %{
-    "FOO" => 0, "BAR" => 1, "BAZ" => 2,
-    "GOO" => 0, "GAR" => 1, "GAZ" => 2
+    "FOO" => 0,
+    "BAR" => 1,
+    "BAZ" => 2,
+    "GOO" => 0,
+    "GAR" => 1,
+    "GAZ" => 2
   }
 
   defp extract_raw_fields(fields) do

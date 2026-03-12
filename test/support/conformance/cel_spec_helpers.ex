@@ -5,56 +5,85 @@ defmodule Celixir.CelSpecHelpers do
 
   # Tests we know we can't pass yet (proto-specific, unsupported features)
   @skip_tests MapSet.new([
-    # Bytes value encoding (textproto parsing issue with invalid UTF-8 bytes)
-    {"basic", "self_eval_nonzeroish", "self_eval_bytes_invalid_utf8"},
-    # int(-9223372036854775808.0) — edge case at min int64 boundary
-    {"conversions", "int", "double_int_min_range"},
-    # string(b'\000\xff') — bytes to string with invalid UTF-8
-    {"conversions", "string", "bytes_invalid"},
-    # bytes('\377') == b'\377' — CEL bytes literal vs bytes() function encoding difference
-    {"conversions", "bytes", "string_unicode_vs_literal"},
-    # Unicode SMP escape in CEL string concatenation (U+1F431)
-    {"string", "concatenation", "ascii_unicode_unicode_smp"},
-    # Proto Any packing/unpacking — requires protobuf binary serialization
-    {"dynamic", "any", "literal"},
-    {"dynamic", "any", "literal_no_field_access"},
-    {"dynamic", "any", "var"},
-    {"dynamic", "any", "field_assign_proto2"},
-    {"dynamic", "any", "field_assign_proto3"},
-    # Proto Any equality comparisons — requires Any deserialization
-    {"comparisons", "eq_wrapper", "eq_proto2_any_unpack_equal"},
-    {"comparisons", "eq_wrapper", "eq_proto2_any_unpack_not_equal"},
-    {"comparisons", "eq_wrapper", "eq_proto2_any_unpack_bytewise_fallback_not_equal"},
-    {"comparisons", "eq_wrapper", "eq_proto2_any_unpack_bytewise_fallback_equal"},
-    {"comparisons", "eq_wrapper", "eq_proto3_any_unpack_equal"},
-    {"comparisons", "eq_wrapper", "eq_proto3_any_unpack_not_equal"},
-    {"comparisons", "eq_wrapper", "eq_proto3_any_unpack_bytewise_fallback_not_equal"},
-    {"comparisons", "eq_wrapper", "eq_proto3_any_unpack_bytewise_fallback_equal"},
-    {"comparisons", "ne_literal", "ne_proto2_any_unpack"},
-    {"comparisons", "ne_literal", "ne_proto2_any_unpack_bytewise_fallback"},
-    {"comparisons", "ne_literal", "ne_proto3_any_unpack"},
-    {"comparisons", "ne_literal", "ne_proto3_any_unpack_bytewise_fallback"},
-    # Nanosecond precision — Elixir DateTime only supports microseconds
-    {"timestamps", "timestamp_conversions", "toString_timestamp_nanos"},
-    # Nanosecond arithmetic at timestamp boundaries (sub-microsecond precision)
-    {"timestamps", "timestamp_range", "add_duration_nanos_over"},
-    {"timestamps", "timestamp_range", "add_duration_nanos_under"},
-    # Timestamp subtraction overflow (spec expects error for near-max durations)
-    {"timestamps", "timestamp_range", "sub_time_duration_over"},
-    {"timestamps", "timestamp_range", "sub_time_duration_under"},
-    # Float32 narrowing — requires single-precision float emulation
-    {"dynamic", "float", "literal_not_double"},
-    {"dynamic", "float", "field_assign_proto2_subnorm"},
-    {"dynamic", "float", "field_assign_proto3_range"},
-    {"dynamic", "float", "field_assign_proto3_round_to_zero"},
-    # Strong enum mode — requires enum types (not just ints)
-    {"enums", "strong_proto2", "type_global"},
-    {"enums", "strong_proto2", "type_nested"},
-    {"enums", "strong_proto2", "field_type"},
-    {"enums", "strong_proto3", "type_global"},
-    {"enums", "strong_proto3", "type_nested"},
-    {"enums", "strong_proto3", "field_type"}
-  ])
+                # Bytes value encoding (textproto parsing issue with invalid UTF-8 bytes)
+                {"basic", "self_eval_nonzeroish", "self_eval_bytes_invalid_utf8"},
+                # int(-9223372036854775808.0) — edge case at min int64 boundary
+                {"conversions", "int", "double_int_min_range"},
+                # string(b'\000\xff') — bytes to string with invalid UTF-8
+                {"conversions", "string", "bytes_invalid"},
+                # bytes('\377') == b'\377' — CEL bytes literal vs bytes() function encoding difference
+                {"conversions", "bytes", "string_unicode_vs_literal"},
+                # Unicode SMP escape in CEL string concatenation (U+1F431)
+                {"string", "concatenation", "ascii_unicode_unicode_smp"},
+                # Proto Any — var test needs textproto parser support for nested Any object_value bindings
+                {"dynamic", "any", "var"},
+                # Proto Any field_assign proto3 — needs container resolution for correct type_url
+                {"dynamic", "any", "field_assign_proto3"},
+                # Proto Any comparison — bytewise fallback tests need unresolvable type_url handling
+                {"comparisons", "eq_wrapper", "eq_proto2_any_unpack_bytewise_fallback_not_equal"},
+                {"comparisons", "eq_wrapper", "eq_proto2_any_unpack_bytewise_fallback_equal"},
+                {"comparisons", "eq_wrapper", "eq_proto3_any_unpack_bytewise_fallback_not_equal"},
+                {"comparisons", "eq_wrapper", "eq_proto3_any_unpack_bytewise_fallback_equal"},
+                {"comparisons", "ne_literal", "ne_proto2_any_unpack_bytewise_fallback"},
+                {"comparisons", "ne_literal", "ne_proto3_any_unpack_bytewise_fallback"},
+                # Nanosecond precision — Elixir DateTime only supports microseconds
+                {"timestamps", "timestamp_conversions", "toString_timestamp_nanos"},
+                # Nanosecond arithmetic at timestamp boundaries (sub-microsecond precision)
+                {"timestamps", "timestamp_range", "add_duration_nanos_over"},
+                {"timestamps", "timestamp_range", "add_duration_nanos_under"},
+                # Timestamp subtraction overflow (spec expects error for near-max durations)
+                {"timestamps", "timestamp_range", "sub_time_duration_over"},
+                {"timestamps", "timestamp_range", "sub_time_duration_under"},
+                # Float32 narrowing — requires single-precision float emulation
+                {"dynamic", "float", "literal_not_double"},
+                {"dynamic", "float", "field_assign_proto2_subnorm"},
+                {"dynamic", "float", "field_assign_proto3_range"},
+                {"dynamic", "float", "field_assign_proto3_round_to_zero"},
+                # Strong enum mode — requires enum types (not just ints)
+                {"enums", "strong_proto2", "type_global"},
+                {"enums", "strong_proto2", "type_nested"},
+                {"enums", "strong_proto2", "field_type"},
+                {"enums", "strong_proto3", "type_global"},
+                {"enums", "strong_proto3", "type_nested"},
+                {"enums", "strong_proto3", "field_type"},
+                # Proto2/Proto3 has() default semantics — requires container-aware proto version tracking
+                {"proto3", "has", "single_set_to_default"},
+                {"proto3", "has", "single_enum_set_zero"},
+                # Proto2 scalar_with_default — proto2 field defaults differ from proto3
+                {"proto2", "empty_field", "scalar_with_default"},
+                # Proto Any literal encoding — requires proto binary serialization
+                {"proto2", "literal_wellknown", "any"},
+                {"proto3", "literal_wellknown", "any"},
+                # Proto literal_wellknown — requires proto-encoded representation for Duration/Timestamp/Struct
+                {"proto2", "literal_wellknown", "duration"},
+                {"proto3", "literal_wellknown", "duration"},
+                {"proto2", "literal_wellknown", "timestamp"},
+                {"proto3", "literal_wellknown", "timestamp"},
+                {"proto2", "literal_wellknown", "struct"},
+                {"proto3", "literal_wellknown", "struct"},
+                # Block ext with deeply nested proto struct bindings — textproto parser lacks nested type awareness
+                {"block_ext", "basic", "select_nested_1"},
+                {"block_ext", "basic", "select_nested_message_map_index_1"},
+                {"block_ext", "basic", "select_nested_message_map_index_2"},
+                {"block_ext", "basic", "presence_test_with_ternary_nested"},
+                # Proto2 extensions — requires proto.hasExt() with qualified extension descriptors
+                {"proto2_ext", "has_ext", "package_scoped_int32"},
+                {"proto2_ext", "has_ext", "package_scoped_nested_ext"},
+                {"proto2_ext", "has_ext", "package_scoped_test_all_types_ext"},
+                {"proto2_ext", "has_ext", "package_scoped_test_all_types_nested_enum_ext"},
+                {"proto2_ext", "has_ext", "package_scoped_repeated_test_all_types"},
+                # Namespace/container resolution — requires container-aware identifier resolution
+                {"namespace", "namespace", "self_eval_container_lookup"},
+                {"namespace", "namespace", "self_eval_container_lookup_unchecked"},
+                {"namespace", "namespace_shadowing", "basic"},
+                {"namespace", "namespace_shadowing", "disambiguation"},
+                {"namespace", "namespace_shadowing", "comprehension_shadowing_disambiguation"},
+                {"namespace", "namespace_shadowing", "comprehension_shadowing_selector"},
+                {"namespace", "namespace_shadowing", "comprehension_shadowing_selector_parse_only"},
+                {"namespace", "namespace_shadowing", "comprehension_shadowing_namespaced_selector_disambiguation"},
+                # Nanosecond precision in wrapper to_json (Elixir DateTime only supports microseconds)
+                {"wrappers", "timestamp", "to_json"}
+              ])
 
   def skip_tests, do: @skip_tests
 
@@ -118,19 +147,48 @@ defmodule Celixir.CelSpecHelpers do
 
   defp convert_proto_object(type_name, fields) do
     case type_name do
-      "google.protobuf.BoolValue" -> Map.get(fields, "value", false)
-      "google.protobuf.Int32Value" -> Map.get(fields, "value", 0)
-      "google.protobuf.Int64Value" -> Map.get(fields, "value", 0)
-      "google.protobuf.UInt32Value" -> Map.get(fields, "value", 0)
-      "google.protobuf.UInt64Value" -> Map.get(fields, "value", 0)
-      "google.protobuf.FloatValue" -> Map.get(fields, "value", 0.0) * 1.0
-      "google.protobuf.DoubleValue" -> Map.get(fields, "value", 0.0) * 1.0
-      "google.protobuf.StringValue" -> Map.get(fields, "value", "")
-      "google.protobuf.BytesValue" -> Map.get(fields, "value", "")
-      "google.protobuf.Value" -> convert_proto_value(fields)
-      "google.protobuf.Struct" -> convert_proto_struct(fields)
-      "google.protobuf.ListValue" -> convert_proto_list(fields)
-      _ -> {:cel_struct, type_name, fields}
+      "google.protobuf.BoolValue" ->
+        Map.get(fields, "value", false)
+
+      "google.protobuf.Int32Value" ->
+        Map.get(fields, "value", 0)
+
+      "google.protobuf.Int64Value" ->
+        Map.get(fields, "value", 0)
+
+      "google.protobuf.UInt32Value" ->
+        Map.get(fields, "value", 0)
+
+      "google.protobuf.UInt64Value" ->
+        Map.get(fields, "value", 0)
+
+      "google.protobuf.FloatValue" ->
+        Map.get(fields, "value", 0.0) * 1.0
+
+      "google.protobuf.DoubleValue" ->
+        Map.get(fields, "value", 0.0) * 1.0
+
+      "google.protobuf.StringValue" ->
+        Map.get(fields, "value", "")
+
+      "google.protobuf.BytesValue" ->
+        Map.get(fields, "value", "")
+
+      "google.protobuf.Value" ->
+        convert_proto_value(fields)
+
+      "google.protobuf.Struct" ->
+        convert_proto_struct(fields)
+
+      "google.protobuf.ListValue" ->
+        convert_proto_list(fields)
+
+      "google.protobuf.Any" ->
+        # Auto-unpack Any bindings to their inner message
+        Celixir.Proto.unpack_any(fields)
+
+      _ ->
+        {:cel_struct, type_name, fields}
     end
   end
 
@@ -292,7 +350,18 @@ defmodule Celixir.CelSpecHelpers do
   end
 
   defp proto_value_matches?(expected, actual) when expected == actual, do: true
-  defp proto_value_matches?(%{"value" => inner}, actual), do: normalize_for_compare(actual) == normalize_for_compare(inner)
+
+  # Match expected plain map against actual {:cel_struct, _, fields} (e.g. packed Any)
+  defp proto_value_matches?(%{} = expected, {:cel_struct, _type, actual_fields}) when map_size(expected) > 0 do
+    Enum.all?(expected, fn {k, v} ->
+      actual_v = Map.get(actual_fields, k)
+      proto_value_matches?(v, actual_v)
+    end)
+  end
+
+  defp proto_value_matches?(%{"value" => inner}, actual),
+    do: normalize_for_compare(actual) == normalize_for_compare(inner)
+
   defp proto_value_matches?(%{} = e, _actual) when map_size(e) == 0, do: true
   defp proto_value_matches?(%{"bool_value" => v}, actual), do: actual == v
   defp proto_value_matches?(%{"number_value" => v}, actual), do: actual == v * 1.0

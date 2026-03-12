@@ -196,10 +196,10 @@ defmodule Celixir.Evaluator do
         end
 
       {:cel_error, _} = e ->
-        # Must use case, not if — if treats any truthy value (e.g. strings) as true
-        case do_eval(right, env) do
-          true -> true
-          _ -> e
+        if do_eval(right, env) == true do
+          true
+        else
+          e
         end
 
       v ->
@@ -207,9 +207,10 @@ defmodule Celixir.Evaluator do
         e = cel_error("no_matching_overload: || on #{cel_typeof(v)}")
 
         # Must use case, not if — if treats any truthy value (e.g. strings) as true
-        case do_eval(right, env) do
-          true -> true
-          _ -> e
+        if do_eval(right, env) == true do
+          true
+        else
+          e
         end
     end
   end
@@ -319,7 +320,8 @@ defmodule Celixir.Evaluator do
   # cel.block([bindings...], result) — evaluate bindings sequentially, then result
   defp do_eval(%AST.CelBlock{bindings: bindings, result: result}, env) do
     env2 =
-      Enum.with_index(bindings)
+      bindings
+      |> Enum.with_index()
       |> Enum.reduce(env, fn {binding_expr, idx}, acc_env ->
         val = do_eval(binding_expr, acc_env)
         Environment.put_variable(acc_env, "__cel_block_#{idx}__", val)
@@ -469,6 +471,13 @@ defmodule Celixir.Evaluator do
 
   defp normalize(v), do: v
 
+  # Auto-unpack Any struct values when they're accessed (read from a field, etc.)
+  defp maybe_unpack_any({:cel_struct, "google.protobuf.Any", fields}) do
+    Proto.unpack_any(fields)
+  end
+
+  defp maybe_unpack_any(v), do: v
+
   # Try to resolve a Select chain as a qualified proto type name.
   # e.g., Select(Select(Ident("google"), "protobuf"), "Timestamp") → "google.protobuf.Timestamp"
   defp try_qualified_type(operand, field) do
@@ -541,7 +550,7 @@ defmodule Celixir.Evaluator do
 
   defp select_field({:cel_struct, _type_name, fields}, field) do
     case Map.fetch(fields, field) do
-      {:ok, v} -> normalize(v)
+      {:ok, v} -> normalize(maybe_unpack_any(v))
       :error -> cel_error("no_such_field: #{field}")
     end
   end
@@ -635,17 +644,28 @@ defmodule Celixir.Evaluator do
   defp select_test({:cel_struct, _type_name, fields}, field) do
     provided = Map.get(fields, :__provided_fields__)
 
-    with true <- provided != nil,
-         true <- MapSet.member?(provided, field) do
-      # For repeated (list) and map fields, has() returns false when the value
-      # is the default (empty list/map), even if explicitly set (proto3 semantics).
-      case Map.get(fields, field) do
-        v when is_list(v) -> v != []
-        v when is_map(v) -> v != %{}
-        _ -> true
+    # Unknown field → error (spec requires it)
+    if Map.has_key?(fields, field) || provided == nil do
+      cond do
+        # No schema tracking — fall back to key presence
+        provided == nil ->
+          Map.has_key?(fields, field)
+
+        # Field was not explicitly provided
+        not MapSet.member?(provided, field) ->
+          false
+
+        # For repeated (list) and map fields, has() returns false when the value
+        # is the default (empty list/map), even if explicitly set (proto3 semantics).
+        true ->
+          case Map.get(fields, field) do
+            v when is_list(v) -> v != []
+            v when is_map(v) -> v != %{}
+            _ -> true
+          end
       end
     else
-      _ -> provided == nil and Map.has_key?(fields, field)
+      cel_error("no_such_field: #{field}")
     end
   end
 
@@ -720,8 +740,12 @@ defmodule Celixir.Evaluator do
       end
 
     cond do
-      Map.has_key?(target, idx) -> normalize(Map.get(target, idx))
-      Map.has_key?(target, unwrapped) -> normalize(Map.get(target, unwrapped))
+      Map.has_key?(target, idx) ->
+        normalize(Map.get(target, idx))
+
+      Map.has_key?(target, unwrapped) ->
+        normalize(Map.get(target, unwrapped))
+
       true ->
         # Fall back to cel_equal? key matching (handles int/uint cross-type lookup)
         case map_find_key(target, idx) do
@@ -773,10 +797,35 @@ defmodule Celixir.Evaluator do
 
   defp eval_map([{k_expr, v_expr} | rest], env, acc) do
     with {:ok, k} <- ensure_value(do_eval(k_expr, env)),
+         :ok <- validate_map_key(k),
+         :ok <- check_duplicate_key(k, acc),
          {:ok, v} <- ensure_value(do_eval(v_expr, env)) do
       eval_map(rest, env, Map.put(acc, k, v))
     end
   end
+
+  defp validate_map_key(nil), do: cel_error("unsupported key type")
+  defp validate_map_key(k) when is_float(k), do: cel_error("unsupported key type")
+  defp validate_map_key(_), do: :ok
+
+  defp check_duplicate_key(k, acc) do
+    if Map.has_key?(acc, k) or has_equivalent_key?(k, acc) do
+      cel_error("Failed with repeated key")
+    else
+      :ok
+    end
+  end
+
+  # Check for cross-type numeric key equivalence (e.g., 0 int == 0u uint)
+  defp has_equivalent_key?({:cel_int, v}, acc) do
+    Map.has_key?(acc, {:cel_uint, v})
+  end
+
+  defp has_equivalent_key?({:cel_uint, v}, acc) do
+    Map.has_key?(acc, {:cel_int, v})
+  end
+
+  defp has_equivalent_key?(_, _acc), do: false
 
   # Struct field evaluation — evaluates entries then finalizes via Proto module
   defp eval_struct_fields([], _env, type_name, acc) do
@@ -1040,11 +1089,44 @@ defmodule Celixir.Evaluator do
 
   defp struct_equal?({:cel_struct, t1, f1}, {:cel_struct, t2, f2}) do
     t1 == t2 and
-      map_equal?(
+      struct_fields_equal?(
         Map.delete(f1, :__provided_fields__),
         Map.delete(f2, :__provided_fields__)
       )
   end
+
+  # Compare struct fields with proto message semantics:
+  # nil and a default struct are equivalent (both mean "not set")
+  defp struct_fields_equal?(f1, f2) do
+    ka = Map.keys(f1)
+    kb = Map.keys(f2)
+
+    length(ka) == length(kb) and
+      Enum.all?(ka, fn key ->
+        v1 = Map.get(f1, key)
+        v2 = Map.get(f2, key)
+        proto_field_equal?(v1, v2)
+      end)
+  end
+
+  # nil message field == default struct (both represent unset)
+  defp proto_field_equal?(nil, {:cel_struct, _, _}), do: true
+  defp proto_field_equal?({:cel_struct, _, _}, nil), do: true
+  defp proto_field_equal?(nil, {:cel_lazy_default, _}), do: true
+  defp proto_field_equal?({:cel_lazy_default, _}, nil), do: true
+  defp proto_field_equal?({:cel_lazy_default, a}, {:cel_lazy_default, b}), do: a == b
+  defp proto_field_equal?({:cel_lazy_default, _}, {:cel_struct, _, _}), do: true
+  defp proto_field_equal?({:cel_struct, _, _}, {:cel_lazy_default, _}), do: true
+
+  # Unpack Any values before comparing
+  defp proto_field_equal?({:cel_struct, "google.protobuf.Any", f1}, {:cel_struct, "google.protobuf.Any", f2}) do
+    cel_equal?(
+      maybe_unpack_any({:cel_struct, "google.protobuf.Any", f1}),
+      maybe_unpack_any({:cel_struct, "google.protobuf.Any", f2})
+    )
+  end
+
+  defp proto_field_equal?(a, b), do: cel_equal?(a, b)
 
   defp list_equal?([], []), do: true
   defp list_equal?([], _), do: false
@@ -2510,12 +2592,12 @@ defmodule Celixir.Evaluator do
   defp resolve_cidr_arg(other), do: cel_error("expected CIDR or string, got #{cel_typeof(other)}")
 
   defp cidr_contains_ip?({:cel_cidr, net_addr, prefix}, ip_addr) do
-    with true <- tuple_size(net_addr) == tuple_size(ip_addr) do
+    if tuple_size(net_addr) == tuple_size(ip_addr) do
       masked_net = apply_mask(net_addr, prefix)
       masked_ip = apply_mask(ip_addr, prefix)
       masked_net == masked_ip
     else
-      _ -> false
+      false
     end
   end
 
@@ -2538,23 +2620,28 @@ defmodule Celixir.Evaluator do
 
   defp apply_mask(addr, prefix) when tuple_size(addr) == 8 do
     bits = ip6_to_integer(addr)
-    mask = if prefix == 0, do: 0, else: Bitwise.band(0xFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFF, Bitwise.bsl(0xFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFF, 128 - prefix))
+
+    mask =
+      if prefix == 0,
+        do: 0,
+        else:
+          Bitwise.band(0xFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFF, Bitwise.bsl(0xFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFF, 128 - prefix))
+
     integer_to_ip6(Bitwise.band(bits, mask))
   end
 
   defp ip4_to_integer({a, b, c, d}) do
-    Bitwise.bsl(a, 24) |> Bitwise.bor(Bitwise.bsl(b, 16)) |> Bitwise.bor(Bitwise.bsl(c, 8)) |> Bitwise.bor(d)
+    a |> Bitwise.bsl(24) |> Bitwise.bor(Bitwise.bsl(b, 16)) |> Bitwise.bor(Bitwise.bsl(c, 8)) |> Bitwise.bor(d)
   end
 
   defp integer_to_ip4(n) do
-    {Bitwise.band(Bitwise.bsr(n, 24), 0xFF),
-     Bitwise.band(Bitwise.bsr(n, 16), 0xFF),
-     Bitwise.band(Bitwise.bsr(n, 8), 0xFF),
-     Bitwise.band(n, 0xFF)}
+    {Bitwise.band(Bitwise.bsr(n, 24), 0xFF), Bitwise.band(Bitwise.bsr(n, 16), 0xFF),
+     Bitwise.band(Bitwise.bsr(n, 8), 0xFF), Bitwise.band(n, 0xFF)}
   end
 
   defp ip6_to_integer({a, b, c, d, e, f, g, h}) do
-    Bitwise.bsl(a, 112)
+    a
+    |> Bitwise.bsl(112)
     |> Bitwise.bor(Bitwise.bsl(b, 96))
     |> Bitwise.bor(Bitwise.bsl(c, 80))
     |> Bitwise.bor(Bitwise.bsl(d, 64))
@@ -2565,13 +2652,9 @@ defmodule Celixir.Evaluator do
   end
 
   defp integer_to_ip6(n) do
-    {Bitwise.band(Bitwise.bsr(n, 112), 0xFFFF),
-     Bitwise.band(Bitwise.bsr(n, 96), 0xFFFF),
-     Bitwise.band(Bitwise.bsr(n, 80), 0xFFFF),
-     Bitwise.band(Bitwise.bsr(n, 64), 0xFFFF),
-     Bitwise.band(Bitwise.bsr(n, 48), 0xFFFF),
-     Bitwise.band(Bitwise.bsr(n, 32), 0xFFFF),
-     Bitwise.band(Bitwise.bsr(n, 16), 0xFFFF),
-     Bitwise.band(n, 0xFFFF)}
+    {Bitwise.band(Bitwise.bsr(n, 112), 0xFFFF), Bitwise.band(Bitwise.bsr(n, 96), 0xFFFF),
+     Bitwise.band(Bitwise.bsr(n, 80), 0xFFFF), Bitwise.band(Bitwise.bsr(n, 64), 0xFFFF),
+     Bitwise.band(Bitwise.bsr(n, 48), 0xFFFF), Bitwise.band(Bitwise.bsr(n, 32), 0xFFFF),
+     Bitwise.band(Bitwise.bsr(n, 16), 0xFFFF), Bitwise.band(n, 0xFFFF)}
   end
 end

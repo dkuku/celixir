@@ -493,8 +493,7 @@ defmodule Celixir.Parser do
   #   collection.transformList(k, v, expr) / collection.transformList(k, v, pred, expr)
   #   collection.transformMap(k, v, expr) / collection.transformMap(k, v, pred, expr)
   # Convert CelIterVar to Ident with synthetic name for use in comprehension patterns
-  defp normalize_iter_var(%AST.CelIterVar{depth: d, index: i}),
-    do: %AST.Ident{name: "__cel_iter_#{d}_#{i}__"}
+  defp normalize_iter_var(%AST.CelIterVar{depth: d, index: i}), do: %AST.Ident{name: "__cel_iter_#{d}_#{i}__"}
 
   defp normalize_iter_var(other), do: other
 

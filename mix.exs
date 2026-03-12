@@ -25,7 +25,7 @@ defmodule Celixir.MixProject do
     [extra_applications: [:logger]]
   end
 
-  defp elixirc_paths(:test), do: ["lib", "test/support"]
+  defp elixirc_paths(:test), do: ["lib", "test/support", "test/support/generated"]
   defp elixirc_paths(_), do: ["lib"]
 
   defp deps do

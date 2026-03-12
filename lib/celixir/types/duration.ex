@@ -92,6 +92,14 @@ defmodule Celixir.Types.Duration do
     end
   end
 
+  @doc "Convert to proto representation {seconds, nanos}."
+  def to_proto(%__MODULE__{} = d) do
+    total_ns = to_total_nanos(d)
+    seconds = div(total_ns, 1_000_000_000)
+    nanos = rem(total_ns, 1_000_000_000)
+    {seconds, nanos}
+  end
+
   @doc "Convert to canonical string (seconds with optional fractional nanos)."
   def to_string(%__MODULE__{} = d) do
     total_ns = to_total_nanos(d)
