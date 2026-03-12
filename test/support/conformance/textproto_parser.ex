@@ -267,6 +267,11 @@ defmodule Celixir.Conformance.TextprotoParser do
       has_field?(fields, "type_value") ->
         {:type, get_string(fields, "type_value")}
 
+      has_field?(fields, "enum_value") ->
+        # Enum values — in legacy mode, treat as int
+        enum_fields = get_block(fields, "enum_value") || []
+        {:int64, get_number(enum_fields, "value") || 0}
+
       has_field?(fields, "object_value") ->
         obj_fields = get_block(fields, "object_value") || []
         extract_object_value(obj_fields)
@@ -413,6 +418,14 @@ defmodule Celixir.Conformance.TextprotoParser do
   @struct_fields ~w(single_struct struct_value)
   # Known field names that contain Value messages
   @value_fields ~w(single_value)
+  # Known field names that contain enum values
+  @enum_fields ~w(standalone_enum single_nested_enum repeated_nested_enum)
+
+  # Known proto enum ident-to-int mappings
+  @enum_ident_values %{
+    "FOO" => 0, "BAR" => 1, "BAZ" => 2,
+    "GOO" => 0, "GAR" => 1, "GAZ" => 2
+  }
 
   defp extract_raw_fields(fields) do
     # Group by field name to detect repeated fields
@@ -421,7 +434,7 @@ defmodule Celixir.Conformance.TextprotoParser do
     Map.new(grouped, fn
       {name, [single]} ->
         case single do
-          {:scalar, v} -> {name, v}
+          {:scalar, v} -> {name, maybe_convert_enum_field(name, v)}
           {:block, block} -> {name, extract_raw_block_for(name, block)}
         end
 
@@ -430,12 +443,19 @@ defmodule Celixir.Conformance.TextprotoParser do
         vals =
           Enum.map(multiples, fn
             {:block, block} -> extract_raw_block_for(name, block)
-            {:scalar, v} -> v
+            {:scalar, v} -> maybe_convert_enum_field(name, v)
           end)
 
         {name, vals}
     end)
   end
+
+  # Convert enum ident strings to integers for enum fields
+  defp maybe_convert_enum_field(name, v) when is_binary(v) and name in @enum_fields do
+    Map.get(@enum_ident_values, v, v)
+  end
+
+  defp maybe_convert_enum_field(_name, v), do: v
 
   # Route block extraction based on the field name
   defp extract_raw_block_for(name, block) do
@@ -474,7 +494,10 @@ defmodule Celixir.Conformance.TextprotoParser do
   defp parse_fields([{:ident, name}, {:colon} | rest], acc) do
     case rest do
       [{:string, val} | rest2] ->
-        parse_fields(rest2, [{name, {:scalar, val}} | acc])
+        # Handle textproto string concatenation: adjacent strings are joined
+        {extra_strings, rest3} = collect_adjacent_strings(rest2)
+        combined = Enum.join([val | extra_strings])
+        parse_fields(rest3, [{name, {:scalar, combined}} | acc])
 
       [{:number, val} | rest2] ->
         parse_fields(rest2, [{name, {:scalar, val}} | acc])
@@ -502,6 +525,10 @@ defmodule Celixir.Conformance.TextprotoParser do
         {block_fields, rest3} = parse_fields(rest2)
         parse_fields(rest3, [{name, {:block, block_fields}} | acc])
 
+      # Bare ident value (e.g., enum constants like BAZ, FOO, or numeric idents like NaN)
+      [{:ident, val} | rest2] ->
+        parse_fields(rest2, [{name, {:scalar, val}} | acc])
+
       _ ->
         parse_fields(rest, acc)
     end
@@ -520,6 +547,14 @@ defmodule Celixir.Conformance.TextprotoParser do
   end
 
   defp parse_fields([_ | rest], acc), do: parse_fields(rest, acc)
+
+  # Collect adjacent string tokens for textproto string concatenation
+  defp collect_adjacent_strings([{:string, s} | rest]) do
+    {more, final_rest} = collect_adjacent_strings(rest)
+    {[s | more], final_rest}
+  end
+
+  defp collect_adjacent_strings(rest), do: {[], rest}
 
   defp get_string(fields, name) do
     case List.keyfind(fields, name, 0) do

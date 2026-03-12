@@ -150,9 +150,8 @@ defmodule Celixir do
   """
   @spec compile(String.t()) :: {:ok, Celixir.Program.t()} | {:error, String.t()}
   def compile(expression) do
-    case parse(expression) do
-      {:ok, ast} -> {:ok, Celixir.Program.new(ast, expression)}
-      {:error, _} = err -> err
+    with {:ok, ast} <- parse(expression) do
+      {:ok, Celixir.Program.new(ast, expression)}
     end
   end
 
@@ -162,9 +161,8 @@ defmodule Celixir do
   @spec eval_ast(Celixir.AST.expr(), Environment.t() | map()) ::
           {:ok, any()} | {:error, String.t()}
   def eval_ast(ast, %Environment{} = env) do
-    case Evaluator.eval(ast, env) do
-      {:ok, result} -> {:ok, unwrap(result)}
-      {:error, _} = err -> err
+    with {:ok, result} <- Evaluator.eval(ast, env) do
+      {:ok, unwrap(result)}
     end
   end
 

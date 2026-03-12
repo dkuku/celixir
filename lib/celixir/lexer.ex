@@ -283,6 +283,17 @@ defmodule Celixir.Lexer do
     tokenize(rest, line, [token | acc])
   end
 
+  # Backtick-quoted identifiers: `foo.bar` → ident token
+  defp tokenize(<<"`", rest::binary>>, line, acc) do
+    case read_backtick_ident(rest, line, []) do
+      {:ok, ident, rest2} ->
+        tokenize(rest2, line, [{:ident, ident, line} | acc])
+
+      {:error, _} = err ->
+        err
+    end
+  end
+
   defp tokenize(<<c, _::binary>>, line, _acc) do
     {:error, "line #{line}: unexpected character '#{<<c>>}'"}
   end
@@ -298,6 +309,18 @@ defmodule Celixir.Lexer do
   end
 
   defp read_ident(rest, acc), do: {acc |> Enum.reverse() |> List.to_string(), rest}
+
+  defp read_backtick_ident(<<>>, line, _acc), do: {:error, "line #{line}: unterminated backtick identifier"}
+
+  defp read_backtick_ident(<<"`", rest::binary>>, _line, acc) do
+    {:ok, acc |> Enum.reverse() |> IO.iodata_to_binary(), rest}
+  end
+
+  defp read_backtick_ident(<<?\n, _::binary>>, line, _acc), do: {:error, "line #{line}: newline in backtick identifier"}
+
+  defp read_backtick_ident(<<c::utf8, rest::binary>>, line, acc) do
+    read_backtick_ident(rest, line, [<<c::utf8>> | acc])
+  end
 
   defp read_hex(input, line, acc) do
     {digits, rest} = read_hex_digits(input, [])

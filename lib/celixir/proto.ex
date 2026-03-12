@@ -197,7 +197,10 @@ defmodule Celixir.Proto do
   defp validate_field(:bool, v) when is_boolean(v), do: {:ok, v}
   defp validate_field(:string, v) when is_binary(v), do: {:ok, v}
   defp validate_field(:bytes, {:cel_bytes, _} = v), do: {:ok, v}
-  defp validate_field(:enum, {:cel_int, _} = v), do: {:ok, v}
+  defp validate_field(:enum, {:cel_int, v}) when v >= @int32_min and v <= @int32_max,
+    do: {:ok, {:cel_int, v}}
+
+  defp validate_field(:enum, {:cel_int, _}), do: {:error, "enum value out of range"}
 
   defp validate_field({:wrapper, :int32}, {:cel_int, v}) when v >= @int32_min and v <= @int32_max,
     do: {:ok, {:cel_int, v}}

@@ -79,71 +79,54 @@ defmodule Celixir.Checker do
   end
 
   def infer(%AST.BinaryOp{op: op, left: left, right: right}, decls) when op in [:and, :or] do
-    lt = infer(left, decls)
-    rt = infer(right, decls)
-
-    cond do
-      match?({:error, _}, lt) ->
-        lt
-
-      match?({:error, _}, rt) ->
-        rt
-
-      lt in [:bool, :dyn] and rt in [:bool, :dyn] ->
+    with {:ok, lt} <- infer_ok(left, decls),
+         {:ok, rt} <- infer_ok(right, decls) do
+      if lt in [:bool, :dyn] and rt in [:bool, :dyn] do
         :bool
-
-      true ->
+      else
         {:error, "no matching overload for #{op_name(op)} on #{format_type(lt)} and #{format_type(rt)}"}
+      end
     end
   end
 
   def infer(%AST.BinaryOp{op: op, left: left, right: right}, decls) when op in [:add, :sub, :mul, :div, :mod] do
-    lt = infer(left, decls)
-    rt = infer(right, decls)
+    with {:ok, lt} <- infer_ok(left, decls),
+         {:ok, rt} <- infer_ok(right, decls) do
+      cond do
+        lt == :dyn or rt == :dyn ->
+          :dyn
 
-    cond do
-      match?({:error, _}, lt) ->
-        lt
+        op == :add and lt == :string and rt == :string ->
+          :string
 
-      match?({:error, _}, rt) ->
-        rt
+        op == :add and match?({:list, _}, lt) and match?({:list, _}, rt) ->
+          lt
 
-      lt == :dyn or rt == :dyn ->
-        :dyn
+        op == :add and lt == :bytes and rt == :bytes ->
+          :bytes
 
-      op == :add and lt == :string and rt == :string ->
-        :string
+        lt == rt and lt in [:int, :uint, :double] ->
+          lt
 
-      op == :add and match?({:list, _}, lt) and match?({:list, _}, rt) ->
-        lt
-
-      op == :add and lt == :bytes and rt == :bytes ->
-        :bytes
-
-      lt == rt and lt in [:int, :uint, :double] ->
-        lt
-
-      true ->
-        {:error, "no matching overload for #{op_name(op)} on #{format_type(lt)} and #{format_type(rt)}"}
+        true ->
+          {:error, "no matching overload for #{op_name(op)} on #{format_type(lt)} and #{format_type(rt)}"}
+      end
     end
   end
 
   def infer(%AST.BinaryOp{op: op}, _decls) when op in [:eq, :neq, :lt, :lte, :gt, :gte, :in], do: :bool
 
   def infer(%AST.Ternary{condition: cond_expr, true_expr: t, false_expr: f}, decls) do
-    ct = infer(cond_expr, decls)
-    tt = infer(t, decls)
-    ft = infer(f, decls)
-
-    cond do
-      match?({:error, _}, ct) -> ct
-      match?({:error, _}, tt) -> tt
-      match?({:error, _}, ft) -> ft
-      ct not in [:bool, :dyn] -> {:error, "ternary condition must be bool"}
-      tt == ft -> tt
-      tt == :dyn -> ft
-      ft == :dyn -> tt
-      true -> :dyn
+    with {:ok, ct} <- infer_ok(cond_expr, decls),
+         {:ok, tt} <- infer_ok(t, decls),
+         {:ok, ft} <- infer_ok(f, decls) do
+      cond do
+        ct not in [:bool, :dyn] -> {:error, "ternary condition must be bool"}
+        tt == ft -> tt
+        tt == :dyn -> ft
+        ft == :dyn -> tt
+        true -> :dyn
+      end
     end
   end
 
@@ -163,6 +146,13 @@ defmodule Celixir.Checker do
   def infer(%AST.Index{}, _), do: :dyn
   def infer(%AST.Call{}, _), do: :dyn
   def infer(%AST.Comprehension{}, _), do: :dyn
+
+  defp infer_ok(ast, decls) do
+    case infer(ast, decls) do
+      {:error, _} = err -> err
+      type -> {:ok, type}
+    end
+  end
 
   defp op_name(:add), do: "+"
   defp op_name(:sub), do: "-"

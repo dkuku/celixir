@@ -30,9 +30,8 @@ defmodule Celixir.Program do
         map when is_map(map) -> Celixir.Environment.new(map)
       end
 
-    case Celixir.Evaluator.eval(ast, env) do
-      {:ok, result} -> {:ok, Celixir.unwrap(result)}
-      {:error, _} = err -> err
+    with {:ok, result} <- Celixir.Evaluator.eval(ast, env) do
+      {:ok, Celixir.unwrap(result)}
     end
   end
 

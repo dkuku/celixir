@@ -492,7 +492,16 @@ defmodule Celixir.Parser do
   #   collection.map(k, v, expr) / collection.map(k, v, pred, expr)
   #   collection.transformList(k, v, expr) / collection.transformList(k, v, pred, expr)
   #   collection.transformMap(k, v, expr) / collection.transformMap(k, v, pred, expr)
+  # Convert CelIterVar to Ident with synthetic name for use in comprehension patterns
+  defp normalize_iter_var(%AST.CelIterVar{depth: d, index: i}),
+    do: %AST.Ident{name: "__cel_iter_#{d}_#{i}__"}
+
+  defp normalize_iter_var(other), do: other
+
   defp maybe_expand_method_macro(name, target, args) when name in @comprehension_macros do
+    # Normalize CelIterVar nodes to Ident nodes with synthetic names for comprehension expansion
+    args = Enum.map(args, &normalize_iter_var/1)
+
     case expand_comprehension(name, target, args) do
       {:ok, node} -> {:macro, node}
       :error -> :not_macro
@@ -507,6 +516,36 @@ defmodule Celixir.Parser do
   # optMap(var, expr) -> OptLambda(:map, ...)
   defp maybe_expand_method_macro("optMap", target, [%AST.Ident{name: var}, expr]) do
     {:macro, %AST.OptLambda{kind: :map, target: target, var: var, expr: expr}}
+  end
+
+  # cel.bind(var, init, expr) → Comprehension that just binds var = init, then evaluates expr
+  defp maybe_expand_method_macro("bind", %AST.Ident{name: "cel"}, [%AST.Ident{name: var}, init, expr]) do
+    {:macro,
+     %AST.Comprehension{
+       iter_var: "#unused",
+       iter_var2: nil,
+       iter_range: %AST.CreateList{elements: []},
+       acc_var: var,
+       acc_init: init,
+       loop_condition: %AST.BoolLit{value: false},
+       loop_step: %AST.Ident{name: var},
+       result: expr
+     }}
+  end
+
+  # cel.block([bindings...], result) → CelBlock node
+  defp maybe_expand_method_macro("block", %AST.Ident{name: "cel"}, [%AST.CreateList{elements: bindings}, result]) do
+    {:macro, %AST.CelBlock{bindings: bindings, result: result}}
+  end
+
+  # cel.index(N) → CelIndex node
+  defp maybe_expand_method_macro("index", %AST.Ident{name: "cel"}, [%AST.IntLit{value: n}]) do
+    {:macro, %AST.CelIndex{index: n}}
+  end
+
+  # cel.iterVar(depth, index) → CelIterVar node
+  defp maybe_expand_method_macro("iterVar", %AST.Ident{name: "cel"}, [%AST.IntLit{value: depth}, %AST.IntLit{value: idx}]) do
+    {:macro, %AST.CelIterVar{depth: depth, index: idx}}
   end
 
   defp maybe_expand_method_macro(_name, _target, _args), do: :not_macro

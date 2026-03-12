@@ -204,6 +204,27 @@ defmodule Celixir.AST do
           }
   end
 
+  # cel.block([bindings...], result) — block extension
+  defmodule CelBlock do
+    @moduledoc false
+    defstruct [:bindings, :result]
+    @type t :: %__MODULE__{bindings: [Celixir.AST.expr()], result: Celixir.AST.expr()}
+  end
+
+  # cel.index(N) — reference to a binding in a cel.block
+  defmodule CelIndex do
+    @moduledoc false
+    defstruct [:index]
+    @type t :: %__MODULE__{index: non_neg_integer()}
+  end
+
+  # cel.iterVar(depth, index) — reference to iteration variable in block comprehensions
+  defmodule CelIterVar do
+    @moduledoc false
+    defstruct [:depth, :index]
+    @type t :: %__MODULE__{depth: non_neg_integer(), index: non_neg_integer()}
+  end
+
   @type expr ::
           IntLit.t()
           | UintLit.t()
@@ -226,4 +247,7 @@ defmodule Celixir.AST do
           | CreateStruct.t()
           | Comprehension.t()
           | OptLambda.t()
+          | CelBlock.t()
+          | CelIndex.t()
+          | CelIterVar.t()
 end

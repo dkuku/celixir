@@ -39,15 +39,11 @@ defmodule Celixir.Sigil do
 
   defmacro sigil_CEL({:<<>>, _meta, [expr]}, []) when is_binary(expr) do
     ast =
-      case Lexer.tokenize(expr) do
-        {:ok, tokens} ->
-          case Parser.parse(tokens) do
-            {:ok, ast} -> ast
-            {:error, msg} -> raise CompileError, description: "CEL parse error: #{msg}"
-          end
-
-        {:error, msg} ->
-          raise CompileError, description: "CEL tokenize error: #{msg}"
+      with {:ok, tokens} <- Lexer.tokenize(expr),
+           {:ok, ast} <- Parser.parse(tokens) do
+        ast
+      else
+        {:error, msg} -> raise CompileError, description: "CEL error: #{msg}"
       end
 
     Macro.escape(ast)
@@ -55,21 +51,12 @@ defmodule Celixir.Sigil do
 
   defmacro sigil_CEL({:<<>>, _meta, [expr]}, [?e]) when is_binary(expr) do
     result =
-      case Lexer.tokenize(expr) do
-        {:ok, tokens} ->
-          case Parser.parse(tokens) do
-            {:ok, ast} ->
-              case Evaluator.eval(ast, Environment.new()) do
-                {:ok, value} -> Celixir.unwrap(value)
-                {:error, msg} -> raise CompileError, description: "CEL eval error: #{msg}"
-              end
-
-            {:error, msg} ->
-              raise CompileError, description: "CEL parse error: #{msg}"
-          end
-
-        {:error, msg} ->
-          raise CompileError, description: "CEL tokenize error: #{msg}"
+      with {:ok, tokens} <- Lexer.tokenize(expr),
+           {:ok, ast} <- Parser.parse(tokens),
+           {:ok, value} <- Evaluator.eval(ast, Environment.new()) do
+        Celixir.unwrap(value)
+      else
+        {:error, msg} -> raise CompileError, description: "CEL error: #{msg}"
       end
 
     Macro.escape(result)

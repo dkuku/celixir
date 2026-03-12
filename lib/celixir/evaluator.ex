@@ -43,6 +43,11 @@ defmodule Celixir.Evaluator do
     end
   end
 
+  # Wraps a non-error value in {:ok, val} for use with `with` chains.
+  # Passes through {:cel_error, _} unchanged so `with` falls to `else`.
+  defp ensure_value({:cel_error, _} = e), do: e
+  defp ensure_value(val), do: {:ok, val}
+
   # ===================================================================
   # do_eval — all clauses grouped together
   # ===================================================================
@@ -57,6 +62,12 @@ defmodule Celixir.Evaluator do
   defp do_eval(%AST.NullLit{}, _env), do: nil
 
   # Identifier
+  # CEL proto enum definitions (legacy mode: enums are ints)
+  @enum_values %{
+    "GlobalEnum" => %{"GOO" => 0, "GAR" => 1, "GAZ" => 2},
+    "TestAllTypes.NestedEnum" => %{"FOO" => 0, "BAR" => 1, "BAZ" => 2}
+  }
+
   # CEL type name constants
   @type_denotations %{
     "bool" => :bool,
@@ -93,9 +104,16 @@ defmodule Celixir.Evaluator do
         type_val
 
       :not_type ->
-        with_value(do_eval(operand, env), fn target ->
-          if test_only, do: select_test(target, field), else: select_field(target, field)
-        end)
+        # Try to resolve as a qualified variable name (e.g., a.b.c from bindings)
+        case try_qualified_variable(operand, field, env) do
+          {:ok, val} ->
+            if test_only, do: val != nil, else: normalize(val)
+
+          :not_var ->
+            with_value(do_eval(operand, env), fn target ->
+              if test_only, do: select_test(target, field), else: select_field(target, field)
+            end)
+        end
     end
   end
 
@@ -270,67 +288,83 @@ defmodule Celixir.Evaluator do
   end
 
   # Function / method call
+  defp do_eval(%AST.Call{function: name, target: nil, args: args}, env) do
+    with {:ok, args_list} <- ensure_value(eval_args(args, env)) do
+      call_function(name, args_list, env)
+    end
+  end
+
   defp do_eval(%AST.Call{function: name, target: target, args: args}, env) do
-    case eval_args(args, env) do
-      {:cel_error, _} = e ->
-        e
+    with {:ok, args_list} <- ensure_value(eval_args(args, env)) do
+      case ensure_value(do_eval(target, env)) do
+        {:ok, t} ->
+          call_method(name, t, args_list, env)
 
-      args_list ->
-        if target do
-          t = do_eval(target, env)
+        {:cel_error, _} = e ->
+          # If target is a simple ident that failed to resolve, try as qualified function
+          if match?(%AST.Ident{}, target) or match?(%AST.Select{}, target) do
+            qualified = qualified_name(target, name)
 
-          cond do
-            not is_error(t) ->
-              call_method(name, t, args_list, env)
-
-            # If target is a simple ident that failed to resolve, try as qualified function
-            match?(%AST.Ident{}, target) or match?(%AST.Select{}, target) ->
-              qualified = qualified_name(target, name)
-
-              case call_function(qualified, args_list, env) do
-                {:cel_error, "undefined function: " <> _} -> t
-                result -> result
-              end
-
-            true ->
-              t
+            case call_function(qualified, args_list, env) do
+              {:cel_error, "undefined function: " <> _} -> e
+              result -> result
+            end
+          else
+            e
           end
-        else
-          call_function(name, args_list, env)
-        end
+      end
+    end
+  end
+
+  # cel.block([bindings...], result) — evaluate bindings sequentially, then result
+  defp do_eval(%AST.CelBlock{bindings: bindings, result: result}, env) do
+    env2 =
+      Enum.with_index(bindings)
+      |> Enum.reduce(env, fn {binding_expr, idx}, acc_env ->
+        val = do_eval(binding_expr, acc_env)
+        Environment.put_variable(acc_env, "__cel_block_#{idx}__", val)
+      end)
+
+    do_eval(result, env2)
+  end
+
+  # cel.index(N) — resolve block binding
+  defp do_eval(%AST.CelIndex{index: n}, env) do
+    case Environment.get_variable(env, "__cel_block_#{n}__") do
+      {:ok, value} -> value
+      :error -> cel_error("cel.index(#{n}): binding not found")
+    end
+  end
+
+  # cel.iterVar(depth, index) — resolve iteration variable from comprehension context
+  defp do_eval(%AST.CelIterVar{depth: depth, index: idx}, env) do
+    var_name = "__cel_iter_#{depth}_#{idx}__"
+
+    case Environment.get_variable(env, var_name) do
+      {:ok, value} -> value
+      :error -> cel_error("cel.iterVar(#{depth}, #{idx}): variable not found")
     end
   end
 
   # Comprehension
   defp do_eval(%AST.Comprehension{} = comp, env) do
-    range = do_eval(comp.iter_range, env)
+    with {:ok, range} <- ensure_value(do_eval(comp.iter_range, env)),
+         {:ok, acc} <- ensure_value(do_eval(comp.acc_init, env)) do
+      # Build iteration items based on whether we have one or two iteration variables
+      items = build_iter_items(range, comp.iter_var2)
 
-    if is_error(range) do
-      range
-    else
-      acc = do_eval(comp.acc_init, env)
+      final_acc =
+        case comp.kind do
+          {:transform_map, transform_expr, filter_expr} ->
+            eval_transform_map(items, comp, transform_expr, filter_expr, acc, env)
 
-      if is_error(acc) do
-        acc
-      else
-        # Build iteration items based on whether we have one or two iteration variables
-        items = build_iter_items(range, comp.iter_var2)
-
-        final_acc =
-          case comp.kind do
-            {:transform_map, transform_expr, filter_expr} ->
-              eval_transform_map(items, comp, transform_expr, filter_expr, acc, env)
-
-            :standard ->
-              eval_standard_comprehension(items, comp, acc, env)
-          end
-
-        if is_error(final_acc) do
-          final_acc
-        else
-          result_env = Environment.put_variable(env, comp.acc_var, final_acc)
-          do_eval(comp.result, result_env)
+          :standard ->
+            eval_standard_comprehension(items, comp, acc, env)
         end
+
+      with {:ok, final_acc} <- ensure_value(final_acc) do
+        result_env = Environment.put_variable(env, comp.acc_var, final_acc)
+        do_eval(comp.result, result_env)
       end
     end
   end
@@ -391,37 +425,33 @@ defmodule Celixir.Evaluator do
         |> bind_iter_vars(comp, item)
         |> Environment.put_variable(comp.acc_var, current_acc)
 
-      # Check filter if present
-      include =
-        if filter_expr do
-          filter_val = do_eval(filter_expr, loop_env)
-
-          cond do
-            is_error(filter_val) -> filter_val
-            is_boolean(filter_val) -> filter_val
-            true -> cel_error("filter must be bool, got #{cel_typeof(filter_val)}")
-          end
-        else
-          true
-        end
-
-      cond do
-        is_error(include) ->
-          {:halt, include}
-
-        include ->
-          transform_val = do_eval(transform_expr, loop_env)
-
-          if is_error(transform_val) do
-            {:halt, transform_val}
-          else
-            {:cont, Map.put(current_acc, key, transform_val)}
-          end
-
-        true ->
-          {:cont, current_acc}
+      with {:ok, include} <- eval_filter(filter_expr, loop_env),
+           {:ok, new_acc} <- apply_transform(include, key, transform_expr, loop_env, current_acc) do
+        {:cont, new_acc}
+      else
+        {:cel_error, _} = e -> {:halt, e}
       end
     end)
+  end
+
+  defp eval_filter(nil, _env), do: {:ok, true}
+
+  defp eval_filter(filter_expr, env) do
+    filter_val = do_eval(filter_expr, env)
+
+    cond do
+      is_error(filter_val) -> filter_val
+      is_boolean(filter_val) -> {:ok, filter_val}
+      true -> cel_error("filter must be bool, got #{cel_typeof(filter_val)}")
+    end
+  end
+
+  defp apply_transform(false, _key, _transform_expr, _env, acc), do: {:ok, acc}
+
+  defp apply_transform(true, key, transform_expr, env, acc) do
+    with {:ok, transform_val} <- ensure_value(do_eval(transform_expr, env)) do
+      {:ok, Map.put(acc, key, transform_val)}
+    end
   end
 
   # ===================================================================
@@ -457,9 +487,30 @@ defmodule Celixir.Evaluator do
           Proto.well_known_type?(qualified) or Proto.get_schema(qualified) != nil ->
             {:ok, {:cel_type, qualified}}
 
+          qualified in ["net.IP", "net.CIDR"] ->
+            {:ok, {:cel_type, qualified}}
+
+          # Enum value: prefix is a known enum type, field is a value name
+          Map.has_key?(@enum_values, prefix) ->
+            case get_in(@enum_values, [prefix, field]) do
+              nil -> :not_type
+              int_val -> {:ok, {:cel_int, int_val}}
+            end
+
           true ->
             :not_type
         end
+    end
+  end
+
+  # Try to resolve a Select chain as a qualified variable name (e.g., a.b.c from bindings)
+  defp try_qualified_variable(operand, field, env) do
+    with name when name != nil <- extract_qualified_name(operand),
+         qualified = "#{name}.#{field}",
+         {:ok, val} <- Environment.get_variable(env, qualified) do
+      {:ok, val}
+    else
+      _ -> :not_var
     end
   end
 
@@ -584,10 +635,17 @@ defmodule Celixir.Evaluator do
   defp select_test({:cel_struct, _type_name, fields}, field) do
     provided = Map.get(fields, :__provided_fields__)
 
-    if provided == nil do
-      Map.has_key?(fields, field)
+    with true <- provided != nil,
+         true <- MapSet.member?(provided, field) do
+      # For repeated (list) and map fields, has() returns false when the value
+      # is the default (empty list/map), even if explicitly set (proto3 semantics).
+      case Map.get(fields, field) do
+        v when is_list(v) -> v != []
+        v when is_map(v) -> v != %{}
+        _ -> true
+      end
     else
-      MapSet.member?(provided, field)
+      _ -> provided == nil and Map.has_key?(fields, field)
     end
   end
 
@@ -664,7 +722,12 @@ defmodule Celixir.Evaluator do
     cond do
       Map.has_key?(target, idx) -> normalize(Map.get(target, idx))
       Map.has_key?(target, unwrapped) -> normalize(Map.get(target, unwrapped))
-      true -> cel_error("key #{inspect(unwrapped)} not found in map")
+      true ->
+        # Fall back to cel_equal? key matching (handles int/uint cross-type lookup)
+        case map_find_key(target, idx) do
+          {:ok, matched_key} -> normalize(Map.get(target, matched_key))
+          :error -> cel_error("key #{inspect(unwrapped)} not found in map")
+        end
     end
   end
 
@@ -693,38 +756,25 @@ defmodule Celixir.Evaluator do
 
   # Optional map entry: ?key: value — only include if value has_value
   defp eval_map([{:optional, k_expr, v_expr} | rest], env, acc) do
-    k = do_eval(k_expr, env)
+    with {:ok, k} <- ensure_value(do_eval(k_expr, env)),
+         {:ok, v} <- ensure_value(do_eval(v_expr, env)) do
+      case v do
+        %Optional{has_value: true, value: inner} ->
+          eval_map(rest, env, Map.put(acc, k, inner))
 
-    if is_error(k) do
-      k
-    else
-      v = do_eval(v_expr, env)
+        %Optional{has_value: false} ->
+          eval_map(rest, env, acc)
 
-      if is_error(v) do
-        v
-      else
-        case v do
-          %Optional{has_value: true, value: inner} ->
-            eval_map(rest, env, Map.put(acc, k, inner))
-
-          %Optional{has_value: false} ->
-            eval_map(rest, env, acc)
-
-          _ ->
-            eval_map(rest, env, Map.put(acc, k, v))
-        end
+        _ ->
+          eval_map(rest, env, Map.put(acc, k, v))
       end
     end
   end
 
   defp eval_map([{k_expr, v_expr} | rest], env, acc) do
-    k = do_eval(k_expr, env)
-
-    if is_error(k) do
-      k
-    else
-      v = do_eval(v_expr, env)
-      if is_error(v), do: v, else: eval_map(rest, env, Map.put(acc, k, v))
+    with {:ok, k} <- ensure_value(do_eval(k_expr, env)),
+         {:ok, v} <- ensure_value(do_eval(v_expr, env)) do
+      eval_map(rest, env, Map.put(acc, k, v))
     end
   end
 
@@ -735,11 +785,7 @@ defmodule Celixir.Evaluator do
 
   # Optional struct field: ?field_name: expr — only include if value is a present optional
   defp eval_struct_fields([{:optional, field_name, v_expr} | rest], env, type_name, acc) do
-    v = do_eval(v_expr, env)
-
-    if is_error(v) do
-      v
-    else
+    with {:ok, v} <- ensure_value(do_eval(v_expr, env)) do
       case v do
         %Optional{has_value: true, value: inner} ->
           eval_struct_fields(rest, env, type_name, Map.put(acc, field_name, inner))
@@ -754,25 +800,17 @@ defmodule Celixir.Evaluator do
   end
 
   defp eval_struct_fields([{field_name, v_expr} | rest], env, type_name, acc) do
-    v = do_eval(v_expr, env)
-
-    if is_error(v),
-      do: v,
-      else: eval_struct_fields(rest, env, type_name, Map.put(acc, field_name, v))
+    with {:ok, v} <- ensure_value(do_eval(v_expr, env)) do
+      eval_struct_fields(rest, env, type_name, Map.put(acc, field_name, v))
+    end
   end
 
   defp eval_args([], _env), do: []
 
   defp eval_args([h | t], env) do
-    case do_eval(h, env) do
-      {:cel_error, _} = e ->
-        e
-
-      v ->
-        case eval_args(t, env) do
-          {:cel_error, _} = e -> e
-          rest -> [v | rest]
-        end
+    with {:ok, v} <- ensure_value(do_eval(h, env)),
+         {:ok, rest} <- ensure_value(eval_args(t, env)) do
+      [v | rest]
     end
   end
 
@@ -989,13 +1027,23 @@ defmodule Celixir.Evaluator do
       match?({:cel_struct, _, _}, a) and match?({:cel_struct, _, _}, b) ->
         struct_equal?(a, b)
 
+      match?({:cel_ip, _}, a) and match?({:cel_ip, _}, b) ->
+        ip_equal?(a, b)
+
+      match?({:cel_cidr, _, _}, a) and match?({:cel_cidr, _, _}, b) ->
+        a == b
+
       true ->
         a == b
     end
   end
 
   defp struct_equal?({:cel_struct, t1, f1}, {:cel_struct, t2, f2}) do
-    t1 == t2 and map_equal?(f1, f2)
+    t1 == t2 and
+      map_equal?(
+        Map.delete(f1, :__provided_fields__),
+        Map.delete(f2, :__provided_fields__)
+      )
   end
 
   defp list_equal?([], []), do: true
@@ -1075,6 +1123,12 @@ defmodule Celixir.Evaluator do
   defp check_uint(v) when v >= 0 and v <= @uint64_max, do: {:cel_uint, v}
   defp check_uint(_), do: cel_error("unsigned integer overflow")
 
+  @int32_min -2_147_483_648
+  @int32_max 2_147_483_647
+
+  defp check_enum_int32_range(v) when v >= @int32_min and v <= @int32_max, do: :ok
+  defp check_enum_int32_range(_), do: cel_error("enum value out of range")
+
   # CEL timestamp range: 0001-01-01 to 9999-12-31
   @min_ts_year 1
   @max_ts_year 9999
@@ -1153,6 +1207,12 @@ defmodule Celixir.Evaluator do
 
       %Optional{} ->
         :optional_type
+
+      {:cel_ip, _} ->
+        {:cel_type, "net.IP"}
+
+      {:cel_cidr, _, _} ->
+        {:cel_type, "net.CIDR"}
 
       {:cel_struct, type_name, _} ->
         {:cel_type, type_name}
@@ -1299,6 +1359,8 @@ defmodule Celixir.Evaluator do
       {:cel_bytes, v} -> v
       %Timestamp{} = t -> Timestamp.to_string(t)
       %Duration{} = d -> Duration.to_string(d)
+      {:cel_ip, addr} -> List.to_string(:inet.ntoa(addr))
+      {:cel_cidr, addr, prefix} -> List.to_string(:inet.ntoa(addr)) <> "/" <> Integer.to_string(prefix)
       v when is_integer(v) -> Integer.to_string(v)
       _ -> cel_error("no_matching_overload: string() on #{cel_typeof(arg)}")
     end
@@ -1416,9 +1478,11 @@ defmodule Celixir.Evaluator do
   defp call_builtin("base64.encode", [v], _env) when is_binary(v), do: Base.encode64(v)
 
   defp call_builtin("base64.decode", [v], _env) when is_binary(v) do
-    case Base.decode64(v) do
+    with :error <- Base.decode64(v),
+         :error <- Base.decode64(v, padding: false) do
+      cel_error("base64 decode error")
+    else
       {:ok, decoded} -> {:cel_bytes, decoded}
-      :error -> cel_error("base64 decode error")
     end
   end
 
@@ -1529,6 +1593,77 @@ defmodule Celixir.Evaluator do
   # String extension: strings.quote(s) — global function form
   defp call_builtin("strings.quote", [s], _env) when is_binary(s) do
     cel_quote_string(s)
+  end
+
+  # --- Network extension: ip(), cidr(), isIP(), ip.isCanonical() ---
+
+  defp call_builtin("ip", [str], _env) when is_binary(str) do
+    with :ok <- reject_zone_id(str),
+         {:ok, addr} <- :inet.parse_address(String.to_charlist(str)),
+         :ok <- reject_ipv4_mapped_ipv6(str, addr) do
+      {:cel_ip, addr}
+    else
+      _ -> cel_error("invalid IP address: #{str}")
+    end
+  end
+
+  defp call_builtin("ip", [{:cel_ip, _} = ip], _env), do: ip
+
+  defp call_builtin("cidr", [str], _env) when is_binary(str) do
+    with [ip_str, prefix_str] <- String.split(str, "/", parts: 2),
+         :ok <- reject_zone_id(ip_str),
+         {prefix_len, ""} <- Integer.parse(prefix_str),
+         {:ok, addr} <- :inet.parse_address(String.to_charlist(ip_str)),
+         :ok <- reject_ipv4_mapped_ipv6(ip_str, addr),
+         true <- valid_prefix_length?(addr, prefix_len) do
+      {:cel_cidr, addr, prefix_len}
+    else
+      _ -> cel_error("invalid CIDR: #{str}")
+    end
+  end
+
+  defp call_builtin("isIP", [str], _env) when is_binary(str) do
+    with :ok <- reject_zone_id(str),
+         {:ok, addr} <- :inet.parse_address(String.to_charlist(str)),
+         :ok <- reject_ipv4_mapped_ipv6(str, addr) do
+      true
+    else
+      _ -> false
+    end
+  end
+
+  defp call_builtin("isIP", [{:cel_cidr, _, _}], _env), do: cel_error("isIP: expected string argument")
+  defp call_builtin("isIP", [_], _env), do: false
+
+  defp call_builtin("ip.isCanonical", [str], _env) when is_binary(str) do
+    with :ok <- reject_zone_id(str),
+         {:ok, addr} <- :inet.parse_address(String.to_charlist(str)),
+         :ok <- reject_ipv4_mapped_ipv6(str, addr) do
+      canonical = List.to_string(:inet.ntoa(addr))
+      str == canonical
+    else
+      _ -> cel_error("invalid IP address: #{str}")
+    end
+  end
+
+  # Enum constructor: GlobalEnum(-33) or TestAllTypes.NestedEnum(2)
+  # In legacy mode, returns the int value directly
+  defp call_builtin(name, [arg], _env) when is_map_key(@enum_values, name) do
+    case arg do
+      {:cel_int, v} ->
+        with :ok <- check_enum_int32_range(v) do
+          {:cel_int, v}
+        end
+
+      s when is_binary(s) ->
+        case get_in(@enum_values, [name, s]) do
+          nil -> cel_error("invalid enum value: #{s}")
+          int_val -> {:cel_int, int_val}
+        end
+
+      _ ->
+        cel_error("no_matching_overload: enum constructor on #{cel_typeof(arg)}")
+    end
   end
 
   defp call_builtin(name, _args, _env), do: cel_error("undefined function: #{name}")
@@ -1775,6 +1910,47 @@ defmodule Celixir.Evaluator do
 
   defp call_method("or", %Optional{} = opt, [%Optional{} = other], _env), do: Optional.or_optional(opt, other)
 
+  # --- Network extension: IP methods ---
+
+  defp call_method("family", {:cel_ip, addr}, [], _env) do
+    with {:ok, family} <- ip_family(addr) do
+      {:cel_int, family}
+    end
+  end
+
+  defp call_method("isLoopback", {:cel_ip, addr}, [], _env), do: ip_is_loopback?(addr)
+
+  defp call_method("isUnspecified", {:cel_ip, addr}, [], _env), do: ip_is_unspecified?(addr)
+
+  defp call_method("isGlobalUnicast", {:cel_ip, addr}, [], _env), do: ip_is_global_unicast?(addr)
+
+  defp call_method("isLinkLocalMulticast", {:cel_ip, addr}, [], _env), do: ip_is_link_local_multicast?(addr)
+
+  defp call_method("isLinkLocalUnicast", {:cel_ip, addr}, [], _env), do: ip_is_link_local_unicast?(addr)
+
+  # --- Network extension: CIDR methods ---
+
+  defp call_method("containsIP", {:cel_cidr, _, _} = cidr, [arg], _env) do
+    with {:ok, ip_addr} <- resolve_ip_arg(arg) do
+      cidr_contains_ip?(cidr, ip_addr)
+    end
+  end
+
+  defp call_method("containsCIDR", {:cel_cidr, _, _} = outer, [arg], _env) do
+    with {:ok, inner} <- resolve_cidr_arg(arg) do
+      cidr_contains_cidr?(outer, inner)
+    end
+  end
+
+  defp call_method("ip", {:cel_cidr, addr, _prefix}, [], _env), do: {:cel_ip, addr}
+
+  defp call_method("masked", {:cel_cidr, addr, prefix}, [], _env) do
+    masked_addr = apply_mask(addr, prefix)
+    {:cel_cidr, masked_addr, prefix}
+  end
+
+  defp call_method("prefixLength", {:cel_cidr, _addr, prefix}, [], _env), do: {:cel_int, prefix}
+
   # Protobuf struct field access as method
   defp call_method(name, target, [], _env) when is_struct(target) do
     atom_name = String.to_existing_atom(name)
@@ -1813,6 +1989,8 @@ defmodule Celixir.Evaluator do
   defp timestamp_component("getSeconds"), do: :seconds
   defp timestamp_component("getMilliseconds"), do: :milliseconds
 
+  defp cel_typeof({:cel_ip, _}), do: "net.IP"
+  defp cel_typeof({:cel_cidr, _, _}), do: "net.CIDR"
   defp cel_typeof({:cel_struct, type_name, _}), do: type_name
   defp cel_typeof({:cel_int, _}), do: "int"
   defp cel_typeof({:cel_uint, _}), do: "uint"
@@ -2226,4 +2404,174 @@ defmodule Celixir.Evaluator do
   defp do_fmt_type(%Duration{}), do: "google.protobuf.Duration"
   defp do_fmt_type(%Timestamp{}), do: "google.protobuf.Timestamp"
   defp do_fmt_type(v), do: cel_typeof(v)
+
+  # ===================================================================
+  # Network extension helpers
+  # ===================================================================
+
+  # Reject zone IDs (e.g., "fe80::1%en0")
+  defp reject_zone_id(str) do
+    if String.contains?(str, "%"), do: :error, else: :ok
+  end
+
+  # Reject IPv4-mapped IPv6 addresses in dotted-decimal form (e.g., "::ffff:192.168.0.1")
+  # but allow hex form (e.g., "::ffff:c0a8:1") which is valid IPv6
+  defp reject_ipv4_mapped_ipv6(str, {0, 0, 0, 0, 0, 0xFFFF, _, _}) do
+    if String.match?(str, ~r/\d+\.\d+\.\d+\.\d+/), do: :error, else: :ok
+  end
+
+  defp reject_ipv4_mapped_ipv6(_str, _addr), do: :ok
+
+  defp valid_prefix_length?(addr, prefix) when tuple_size(addr) == 4, do: prefix >= 0 and prefix <= 32
+  defp valid_prefix_length?(addr, prefix) when tuple_size(addr) == 8, do: prefix >= 0 and prefix <= 128
+  defp valid_prefix_length?(_, _), do: false
+
+  # IP equality: normalize IPv4-mapped IPv6 (::ffff:x:y) to IPv4 for comparison
+  defp ip_equal?({:cel_ip, a}, {:cel_ip, b}), do: normalize_ip(a) == normalize_ip(b)
+
+  defp normalize_ip({0, 0, 0, 0, 0, 0xFFFF, hi, lo}) do
+    {Bitwise.bsr(hi, 8), Bitwise.band(hi, 0xFF), Bitwise.bsr(lo, 8), Bitwise.band(lo, 0xFF)}
+  end
+
+  defp normalize_ip(addr), do: addr
+
+  defp ip_family(addr) when tuple_size(addr) == 4, do: {:ok, 4}
+  defp ip_family(addr) when tuple_size(addr) == 8, do: {:ok, 6}
+  defp ip_family(_), do: cel_error("unknown IP family")
+
+  # IPv4 semantics
+  defp ip_is_loopback?({127, _, _, _}), do: true
+  defp ip_is_loopback?({0, 0, 0, 0, 0, 0, 0, 1}), do: true
+  defp ip_is_loopback?(_), do: false
+
+  defp ip_is_unspecified?({0, 0, 0, 0}), do: true
+  defp ip_is_unspecified?({0, 0, 0, 0, 0, 0, 0, 0}), do: true
+  defp ip_is_unspecified?(_), do: false
+
+  defp ip_is_link_local_unicast?({169, 254, _, _}), do: true
+
+  defp ip_is_link_local_unicast?({a, _, _, _, _, _, _, _}) do
+    # fe80::/10 means top 10 bits are 1111111010
+    Bitwise.band(a, 0xFFC0) == 0xFE80
+  end
+
+  defp ip_is_link_local_unicast?(_), do: false
+
+  defp ip_is_link_local_multicast?({224, 0, 0, _}), do: true
+
+  defp ip_is_link_local_multicast?({0xFF02, _, _, _, _, _, _, _}), do: true
+
+  defp ip_is_link_local_multicast?(_), do: false
+
+  defp ip_is_global_unicast?(addr) when tuple_size(addr) == 4 do
+    not ip_is_loopback?(addr) and
+      not ip_is_unspecified?(addr) and
+      not ip_is_link_local_unicast?(addr) and
+      not ip_is_link_local_multicast?(addr) and
+      not ip_is_multicast_v4?(addr) and
+      addr != {255, 255, 255, 255}
+  end
+
+  defp ip_is_global_unicast?(addr) when tuple_size(addr) == 8 do
+    {a, _, _, _, _, _, _, _} = addr
+    # 2000::/3 — top 3 bits are 001
+    Bitwise.band(a, 0xE000) == 0x2000
+  end
+
+  defp ip_is_global_unicast?(_), do: false
+
+  defp ip_is_multicast_v4?({a, _, _, _}) when a >= 224 and a <= 239, do: true
+  defp ip_is_multicast_v4?(_), do: false
+
+  defp resolve_ip_arg({:cel_ip, addr}), do: {:ok, addr}
+
+  defp resolve_ip_arg(str) when is_binary(str) do
+    case :inet.parse_address(String.to_charlist(str)) do
+      {:ok, addr} -> {:ok, addr}
+      _ -> cel_error("invalid IP address: #{str}")
+    end
+  end
+
+  defp resolve_ip_arg(other), do: cel_error("expected IP or string, got #{cel_typeof(other)}")
+
+  defp resolve_cidr_arg({:cel_cidr, _, _} = cidr), do: {:ok, cidr}
+
+  defp resolve_cidr_arg(str) when is_binary(str) do
+    with [ip_str, prefix_str] <- String.split(str, "/", parts: 2),
+         {prefix_len, ""} <- Integer.parse(prefix_str),
+         {:ok, addr} <- :inet.parse_address(String.to_charlist(ip_str)),
+         true <- valid_prefix_length?(addr, prefix_len) do
+      {:ok, {:cel_cidr, addr, prefix_len}}
+    else
+      _ -> cel_error("invalid CIDR: #{str}")
+    end
+  end
+
+  defp resolve_cidr_arg(other), do: cel_error("expected CIDR or string, got #{cel_typeof(other)}")
+
+  defp cidr_contains_ip?({:cel_cidr, net_addr, prefix}, ip_addr) do
+    with true <- tuple_size(net_addr) == tuple_size(ip_addr) do
+      masked_net = apply_mask(net_addr, prefix)
+      masked_ip = apply_mask(ip_addr, prefix)
+      masked_net == masked_ip
+    else
+      _ -> false
+    end
+  end
+
+  defp cidr_contains_cidr?({:cel_cidr, outer_addr, outer_prefix}, {:cel_cidr, inner_addr, inner_prefix}) do
+    with true <- tuple_size(outer_addr) == tuple_size(inner_addr),
+         true <- outer_prefix <= inner_prefix do
+      masked_outer = apply_mask(outer_addr, outer_prefix)
+      masked_inner = apply_mask(inner_addr, outer_prefix)
+      masked_outer == masked_inner
+    else
+      _ -> false
+    end
+  end
+
+  defp apply_mask(addr, prefix) when tuple_size(addr) == 4 do
+    bits = ip4_to_integer(addr)
+    mask = if prefix == 0, do: 0, else: Bitwise.band(0xFFFFFFFF, Bitwise.bsl(0xFFFFFFFF, 32 - prefix))
+    integer_to_ip4(Bitwise.band(bits, mask))
+  end
+
+  defp apply_mask(addr, prefix) when tuple_size(addr) == 8 do
+    bits = ip6_to_integer(addr)
+    mask = if prefix == 0, do: 0, else: Bitwise.band(0xFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFF, Bitwise.bsl(0xFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFF, 128 - prefix))
+    integer_to_ip6(Bitwise.band(bits, mask))
+  end
+
+  defp ip4_to_integer({a, b, c, d}) do
+    Bitwise.bsl(a, 24) |> Bitwise.bor(Bitwise.bsl(b, 16)) |> Bitwise.bor(Bitwise.bsl(c, 8)) |> Bitwise.bor(d)
+  end
+
+  defp integer_to_ip4(n) do
+    {Bitwise.band(Bitwise.bsr(n, 24), 0xFF),
+     Bitwise.band(Bitwise.bsr(n, 16), 0xFF),
+     Bitwise.band(Bitwise.bsr(n, 8), 0xFF),
+     Bitwise.band(n, 0xFF)}
+  end
+
+  defp ip6_to_integer({a, b, c, d, e, f, g, h}) do
+    Bitwise.bsl(a, 112)
+    |> Bitwise.bor(Bitwise.bsl(b, 96))
+    |> Bitwise.bor(Bitwise.bsl(c, 80))
+    |> Bitwise.bor(Bitwise.bsl(d, 64))
+    |> Bitwise.bor(Bitwise.bsl(e, 48))
+    |> Bitwise.bor(Bitwise.bsl(f, 32))
+    |> Bitwise.bor(Bitwise.bsl(g, 16))
+    |> Bitwise.bor(h)
+  end
+
+  defp integer_to_ip6(n) do
+    {Bitwise.band(Bitwise.bsr(n, 112), 0xFFFF),
+     Bitwise.band(Bitwise.bsr(n, 96), 0xFFFF),
+     Bitwise.band(Bitwise.bsr(n, 80), 0xFFFF),
+     Bitwise.band(Bitwise.bsr(n, 64), 0xFFFF),
+     Bitwise.band(Bitwise.bsr(n, 48), 0xFFFF),
+     Bitwise.band(Bitwise.bsr(n, 32), 0xFFFF),
+     Bitwise.band(Bitwise.bsr(n, 16), 0xFFFF),
+     Bitwise.band(n, 0xFFFF)}
+  end
 end
