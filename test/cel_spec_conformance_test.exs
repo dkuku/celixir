@@ -22,13 +22,12 @@ for file <- Path.wildcard(Path.join(testdata_dir, "*.textproto")) do
   defmodule module_name do
     use ExUnit.Case, async: true
 
-    import Celixir.CelSpecHelpers, only: [run_cel_spec_test: 3]
+    import Celixir.CelSpecHelpers, only: [run_cel_spec_test: 3, run_cel_spec_check_test: 1]
 
     for section <- file_data.sections,
         {test, tidx} <- Enum.with_index(section.tests) do
       skip? =
-        MapSet.member?(skip_tests, {file_name, section.name, test.name}) or
-          test[:check_only] == true
+        MapSet.member?(skip_tests, {file_name, section.name, test.name})
 
       if skip? do
         @tag :skip
@@ -44,7 +43,11 @@ for file <- Path.wildcard(Path.join(testdata_dir, "*.textproto")) do
         if skip? do
           :ok
         else
-          run_cel_spec_test(file_name, section_name, test_data)
+          if test_data[:check_only] do
+            run_cel_spec_check_test(test_data)
+          else
+            run_cel_spec_test(file_name, section_name, test_data)
+          end
         end
       end
     end

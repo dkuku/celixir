@@ -5,6 +5,10 @@ defmodule Celixir.CelSpecHelpers do
 
   # Tests we know we can't pass yet (proto-specific, unsupported features)
   @skip_tests MapSet.new([
+                # Proto field access — evaluator doesn't have proto schema for these fields
+                {"type_deductions", "field_access", "map_bool_int"},
+                {"type_deductions", "legacy_nullable_types", "null_assignable_to_duration_parameter_candidate"},
+                {"type_deductions", "legacy_nullable_types", "null_assignable_to_timestamp_parameter_candidate"},
                 # Proto Any — var test needs textproto parser support for nested Any object_value bindings
                 {"dynamic", "any", "var"},
                 # Proto Any field_assign proto3 — needs container resolution for correct type_url
@@ -61,6 +65,35 @@ defmodule Celixir.CelSpecHelpers do
               ])
 
   def skip_tests, do: @skip_tests
+
+  def run_cel_spec_check_test(test) do
+    {:ok, ast} = Celixir.parse(test.expr)
+
+    # Build type environment from test's type_env declarations
+    env = build_check_env(test[:type_env] || [])
+
+    inferred = Celixir.Checker.infer(ast, env) |> Celixir.Checker.finalize_type()
+    expected = test[:deduced_type]
+
+    assert(
+      inferred == expected,
+      "#{test.expr}: expected type #{inspect(expected)}, got #{inspect(inferred)}"
+    )
+  end
+
+  defp build_check_env(type_env_entries) do
+    variables =
+      type_env_entries
+      |> Enum.filter(&(&1.kind == :ident))
+      |> Map.new(&{&1.name, &1.type})
+
+    functions =
+      type_env_entries
+      |> Enum.filter(&(&1.kind == :function))
+      |> Map.new(&{&1.name, &1.overloads})
+
+    %{variables: variables, functions: functions}
+  end
 
   def run_cel_spec_test(_file, _section, test) do
     bindings = convert_bindings(test.bindings)

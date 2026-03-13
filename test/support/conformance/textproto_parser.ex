@@ -207,18 +207,32 @@ defmodule Celixir.Conformance.TextprotoParser do
       name: get_string(fields, "name"),
       description: get_string(fields, "description"),
       expr: get_string(fields, "expr"),
+      container: get_string(fields, "container"),
       value: parse_expected_value(fields),
       eval_error: has_field?(fields, "eval_error"),
       bindings: parse_bindings(fields),
       disable_check: get_bool(fields, "disable_check"),
-      check_only: get_bool(fields, "check_only") || has_field?(fields, "typed_result")
+      check_only: get_bool(fields, "check_only"),
+      type_env: parse_type_env(fields),
+      deduced_type: parse_deduced_type(fields)
     }
   end
 
   defp parse_expected_value(fields) do
+    # Check direct value block first, then typed_result.result
     case get_block(fields, "value") do
-      nil -> nil
-      value_fields -> extract_typed_value(value_fields)
+      nil ->
+        case get_block(fields, "typed_result") do
+          nil -> nil
+          typed_result_fields ->
+            case get_block(typed_result_fields, "result") do
+              nil -> nil
+              result_fields -> extract_typed_value(result_fields)
+            end
+        end
+
+      value_fields ->
+        extract_typed_value(value_fields)
     end
   end
 
@@ -471,6 +485,119 @@ defmodule Celixir.Conformance.TextprotoParser do
     end
   end
 
+  defp parse_type_env(fields) do
+    fields
+    |> get_all("type_env")
+    |> Enum.map(&parse_type_env_entry/1)
+  end
+
+  defp parse_type_env_entry(fields) do
+    name = get_string(fields, "name")
+
+    cond do
+      has_field?(fields, "ident") ->
+        ident_fields = get_block(fields, "ident") || []
+        type_fields = get_block(ident_fields, "type") || []
+        %{name: name, kind: :ident, type: parse_cel_type(type_fields)}
+
+      has_field?(fields, "function") ->
+        func_fields = get_block(fields, "function") || []
+        overloads = parse_function_overloads(func_fields)
+        %{name: name, kind: :function, overloads: overloads}
+    end
+  end
+
+  defp parse_function_overloads(func_fields) do
+    func_fields
+    |> get_all("overloads")
+    |> Enum.map(fn overload_fields ->
+      id = get_string(overload_fields, "overload_id")
+      result_type_fields = get_block(overload_fields, "result_type") || []
+      params = overload_fields |> get_all("params") |> Enum.map(&parse_cel_type/1)
+
+      %{
+        id: id,
+        params: params,
+        result_type: parse_cel_type(result_type_fields)
+      }
+    end)
+  end
+
+  defp parse_deduced_type(fields) do
+    case get_block(fields, "typed_result") do
+      nil ->
+        nil
+
+      typed_result_fields ->
+        case get_block(typed_result_fields, "deduced_type") do
+          nil -> nil
+          type_fields -> parse_cel_type(type_fields)
+        end
+    end
+  end
+
+  @primitive_map %{
+    "BOOL" => :bool,
+    "INT64" => :int,
+    "UINT64" => :uint,
+    "DOUBLE" => :double,
+    "STRING" => :string,
+    "BYTES" => :bytes
+  }
+
+  @well_known_map %{
+    "DURATION" => :duration,
+    "TIMESTAMP" => :timestamp
+  }
+
+  defp parse_cel_type(fields) do
+    cond do
+      has_scalar?(fields, "primitive") ->
+        prim = get_scalar(fields, "primitive")
+        Map.get(@primitive_map, prim, prim)
+
+      has_field?(fields, "null") ->
+        :null_type
+
+      has_field?(fields, "dyn") ->
+        :dyn
+
+      has_scalar?(fields, "message_type") ->
+        {:message, get_string(fields, "message_type")}
+
+      has_scalar?(fields, "well_known") ->
+        wk = get_scalar(fields, "well_known")
+        {:well_known, Map.get(@well_known_map, wk, wk)}
+
+      has_scalar?(fields, "wrapper") ->
+        w = get_scalar(fields, "wrapper")
+        {:wrapper, Map.get(@primitive_map, w, w)}
+
+      has_field?(fields, "list_type") ->
+        list_fields = get_block(fields, "list_type") || []
+        elem_fields = get_block(list_fields, "elem_type") || []
+        {:list, parse_cel_type(elem_fields)}
+
+      has_field?(fields, "map_type") ->
+        map_fields = get_block(fields, "map_type") || []
+        key_fields = get_block(map_fields, "key_type") || []
+        val_fields = get_block(map_fields, "value_type") || []
+        {:map, parse_cel_type(key_fields), parse_cel_type(val_fields)}
+
+      has_field?(fields, "abstract_type") ->
+        abs_fields = get_block(fields, "abstract_type") || []
+        abs_name = get_string(abs_fields, "name")
+        param_types = abs_fields |> get_all("parameter_types") |> Enum.map(&parse_cel_type/1)
+        {:abstract, abs_name, param_types}
+
+      has_scalar?(fields, "type_param") ->
+        {:type_param, get_string(fields, "type_param")}
+
+      true ->
+        nil
+    end
+  end
+
   defp parse_bindings(fields) do
     case get_all(fields, "bindings") do
       [] ->
@@ -614,6 +741,13 @@ defmodule Celixir.Conformance.TextprotoParser do
     case List.keyfind(fields, name, 0) do
       {_, {:scalar, _}} -> true
       _ -> false
+    end
+  end
+
+  defp get_scalar(fields, name) do
+    case List.keyfind(fields, name, 0) do
+      {_, {:scalar, val}} -> val
+      _ -> nil
     end
   end
 end
