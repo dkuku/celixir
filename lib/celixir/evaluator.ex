@@ -1441,24 +1441,56 @@ defmodule Celixir.Evaluator do
 
   defp call_builtin("string", [arg], _env) do
     case arg do
-      v when is_binary(v) -> v
-      {:cel_int, v} -> Integer.to_string(v)
-      {:cel_uint, v} -> Integer.to_string(v)
-      v when is_float(v) -> Float.to_string(v)
-      :nan -> "NaN"
-      :infinity -> "Infinity"
-      :neg_infinity -> "-Infinity"
-      true -> "true"
-      false -> "false"
-      nil -> "null"
+      v when is_binary(v) ->
+        v
+
+      {:cel_int, v} ->
+        Integer.to_string(v)
+
+      {:cel_uint, v} ->
+        Integer.to_string(v)
+
+      v when is_float(v) ->
+        Float.to_string(v)
+
+      :nan ->
+        "NaN"
+
+      :infinity ->
+        "Infinity"
+
+      :neg_infinity ->
+        "-Infinity"
+
+      true ->
+        "true"
+
+      false ->
+        "false"
+
+      nil ->
+        "null"
+
       {:cel_bytes, v} ->
         if String.valid?(v), do: v, else: cel_error("invalid UTF-8 in bytes-to-string conversion")
-      %Timestamp{} = t -> Timestamp.to_string(t)
-      %Duration{} = d -> Duration.to_string(d)
-      {:cel_ip, addr} -> List.to_string(:inet.ntoa(addr))
-      {:cel_cidr, addr, prefix} -> List.to_string(:inet.ntoa(addr)) <> "/" <> Integer.to_string(prefix)
-      v when is_integer(v) -> Integer.to_string(v)
-      _ -> cel_error("no_matching_overload: string() on #{cel_typeof(arg)}")
+
+      %Timestamp{} = t ->
+        Timestamp.to_string(t)
+
+      %Duration{} = d ->
+        Duration.to_string(d)
+
+      {:cel_ip, addr} ->
+        List.to_string(:inet.ntoa(addr))
+
+      {:cel_cidr, addr, prefix} ->
+        List.to_string(:inet.ntoa(addr)) <> "/" <> Integer.to_string(prefix)
+
+      v when is_integer(v) ->
+        Integer.to_string(v)
+
+      _ ->
+        cel_error("no_matching_overload: string() on #{cel_typeof(arg)}")
     end
   end
 

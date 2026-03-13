@@ -223,7 +223,9 @@ defmodule Celixir.Conformance.TextprotoParser do
     case get_block(fields, "value") do
       nil ->
         case get_block(fields, "typed_result") do
-          nil -> nil
+          nil ->
+            nil
+
           typed_result_fields ->
             case get_block(typed_result_fields, "result") do
               nil -> nil

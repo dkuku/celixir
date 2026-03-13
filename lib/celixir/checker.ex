@@ -134,16 +134,14 @@ defmodule Celixir.Checker do
       if lt2 in [:bool, :dyn] and rt2 in [:bool, :dyn] do
         :bool
       else
-        {:error,
-         "no matching overload for #{op_name(op)} on #{format_type(lt)} and #{format_type(rt)}"}
+        {:error, "no matching overload for #{op_name(op)} on #{format_type(lt)} and #{format_type(rt)}"}
       end
     end
   end
 
   # -- BinaryOp: arithmetic ---------------------------------------------------
 
-  def infer(%AST.BinaryOp{op: op, left: left, right: right}, decls)
-      when op in [:add, :sub, :mul, :div, :mod] do
+  def infer(%AST.BinaryOp{op: op, left: left, right: right}, decls) when op in [:add, :sub, :mul, :div, :mod] do
     env = normalize_env(decls)
 
     with {:ok, lt} <- infer_ok(left, env),
@@ -189,17 +187,14 @@ defmodule Celixir.Checker do
           lt2
 
         true ->
-          {:error,
-           "no matching overload for #{op_name(op)} on #{format_type(lt)} and #{format_type(rt)}"}
+          {:error, "no matching overload for #{op_name(op)} on #{format_type(lt)} and #{format_type(rt)}"}
       end
     end
   end
 
   # -- BinaryOp: comparison ---------------------------------------------------
 
-  def infer(%AST.BinaryOp{op: op}, _decls)
-      when op in [:eq, :neq, :lt, :lte, :gt, :gte, :in],
-      do: :bool
+  def infer(%AST.BinaryOp{op: op}, _decls) when op in [:eq, :neq, :lt, :lte, :gt, :gte, :in], do: :bool
 
   # -- Ternary ----------------------------------------------------------------
 
@@ -211,10 +206,10 @@ defmodule Celixir.Checker do
          {:ok, ft} <- infer_ok(f, env) do
       ct2 = unwrap_type(ct)
 
-      if ct2 not in [:bool, :dyn] do
-        {:error, "ternary condition must be bool"}
-      else
+      if ct2 in [:bool, :dyn] do
         unify_types(tt, ft)
+      else
+        {:error, "ternary condition must be bool"}
       end
     end
   end
@@ -361,8 +356,7 @@ defmodule Celixir.Checker do
     :dyn
   end
 
-  def infer(%AST.Call{function: fun, target: target, args: [arg]}, decls)
-      when fun in ["optional.of", "of"] do
+  def infer(%AST.Call{function: fun, target: target, args: [arg]}, decls) when fun in ["optional.of", "of"] do
     # Handle both optional.of(x) and optional.of(x) parsed as method call on "optional"
     if fun == "of" and not match?(%AST.Ident{name: "optional"}, target) do
       infer_call_fallback(fun, target, [arg], decls)
@@ -377,8 +371,7 @@ defmodule Celixir.Checker do
     end
   end
 
-  def infer(%AST.Call{function: fun, target: target, args: []}, _decls)
-      when fun in ["optional.none", "none"] do
+  def infer(%AST.Call{function: fun, target: target, args: []}, _decls) when fun in ["optional.none", "none"] do
     if fun == "none" and not match?(%AST.Ident{name: "optional"}, target) do
       :dyn
     else
@@ -416,6 +409,7 @@ defmodule Celixir.Checker do
 
   # size() function and method
   def infer(%AST.Call{function: "size", target: nil, args: [_]}, _decls), do: :int
+
   def infer(%AST.Call{function: "size", target: target, args: []}, decls) when not is_nil(target) do
     env = normalize_env(decls)
     _t = infer(target, env)
@@ -424,29 +418,21 @@ defmodule Celixir.Checker do
 
   # String methods returning bool
   def infer(%AST.Call{function: f, target: target, args: [_]}, _decls)
-      when f in ["startsWith", "endsWith", "contains", "matches"] and not is_nil(target),
-      do: :bool
+      when f in ["startsWith", "endsWith", "contains", "matches"] and not is_nil(target), do: :bool
 
   # String methods returning string
   def infer(%AST.Call{function: f, target: target, args: _}, _decls)
-      when f in ["lowerAscii", "upperAscii", "trim", "replace", "substring", "charAt"]
-           and not is_nil(target),
-      do: :string
+      when f in ["lowerAscii", "upperAscii", "trim", "replace", "substring", "charAt"] and not is_nil(target), do: :string
 
   # String methods returning int
   def infer(%AST.Call{function: f, target: target, args: _}, _decls)
-      when f in ["indexOf", "lastIndexOf"] and not is_nil(target),
-      do: :int
+      when f in ["indexOf", "lastIndexOf"] and not is_nil(target), do: :int
 
   # split returns list of strings
-  def infer(%AST.Call{function: "split", target: target, args: _}, _decls)
-      when not is_nil(target),
-      do: {:list, :string}
+  def infer(%AST.Call{function: "split", target: target, args: _}, _decls) when not is_nil(target), do: {:list, :string}
 
   # join returns string
-  def infer(%AST.Call{function: "join", target: target, args: _}, _decls)
-      when not is_nil(target),
-      do: :string
+  def infer(%AST.Call{function: "join", target: target, args: _}, _decls) when not is_nil(target), do: :string
 
   # Timestamp/Duration accessors as method calls
   def infer(%AST.Call{function: f, target: target, args: []}, decls)
@@ -468,13 +454,10 @@ defmodule Celixir.Checker do
   end
 
   # optional.hasValue() -> bool
-  def infer(%AST.Call{function: "hasValue", target: target, args: []}, _decls)
-      when not is_nil(target),
-      do: :bool
+  def infer(%AST.Call{function: "hasValue", target: target, args: []}, _decls) when not is_nil(target), do: :bool
 
   # optional.value() -> inner type
-  def infer(%AST.Call{function: "value", target: target, args: []}, decls)
-      when not is_nil(target) do
+  def infer(%AST.Call{function: "value", target: target, args: []}, decls) when not is_nil(target) do
     env = normalize_env(decls)
 
     case infer(target, env) do
@@ -485,8 +468,7 @@ defmodule Celixir.Checker do
   end
 
   # optional.or() -> optional
-  def infer(%AST.Call{function: "or", target: target, args: [alt]}, decls)
-      when not is_nil(target) do
+  def infer(%AST.Call{function: "or", target: target, args: [alt]}, decls) when not is_nil(target) do
     env = normalize_env(decls)
     tt = infer(target, env)
     at = infer(alt, env)
@@ -501,8 +483,7 @@ defmodule Celixir.Checker do
   end
 
   # optional.orValue() -> inner type
-  def infer(%AST.Call{function: "orValue", target: target, args: [alt]}, decls)
-      when not is_nil(target) do
+  def infer(%AST.Call{function: "orValue", target: target, args: [alt]}, decls) when not is_nil(target) do
     env = normalize_env(decls)
     tt = infer(target, env)
     at = infer(alt, env)
@@ -718,11 +699,10 @@ defmodule Celixir.Checker do
   # Parameterized types — unify recursively BEFORE dyn rules
   def unify_types({:list, a}, {:list, b}), do: {:list, unify_types(a, b)}
 
-  def unify_types({:map, ka, va}, {:map, kb, vb}),
-    do: {:map, unify_types(ka, kb), unify_types(va, vb)}
+  def unify_types({:map, ka, va}, {:map, kb, vb}), do: {:map, unify_types(ka, kb), unify_types(va, vb)}
 
   def unify_types({:abstract, n, pa}, {:abstract, n, pb}) when length(pa) == length(pb) do
-    unified = Enum.zip(pa, pb) |> Enum.map(fn {a, b} -> unify_types(a, b) end)
+    unified = pa |> Enum.zip(pb) |> Enum.map(fn {a, b} -> unify_types(a, b) end)
     {:abstract, n, unified}
   end
 
@@ -770,7 +750,8 @@ defmodule Celixir.Checker do
   end
 
   defp match_overload(params, arg_types) do
-    Enum.zip(params, arg_types)
+    params
+    |> Enum.zip(arg_types)
     |> Enum.reduce(%{}, fn
       _, :no_match ->
         :no_match
@@ -813,9 +794,9 @@ defmodule Celixir.Checker do
   end
 
   # Abstract type matching — recursively match parameters
-  defp match_param({:abstract, n, pparams}, {:abstract, n, aparams}, bindings)
-       when length(pparams) == length(aparams) do
-    Enum.zip(pparams, aparams)
+  defp match_param({:abstract, n, pparams}, {:abstract, n, aparams}, bindings) when length(pparams) == length(aparams) do
+    pparams
+    |> Enum.zip(aparams)
     |> Enum.reduce(bindings, fn
       _, :no_match -> :no_match
       {pp, ap}, b -> match_param(pp, ap, b)

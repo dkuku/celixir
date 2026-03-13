@@ -72,7 +72,7 @@ defmodule Celixir.CelSpecHelpers do
     # Build type environment from test's type_env declarations
     env = build_check_env(test[:type_env] || [])
 
-    inferred = Celixir.Checker.infer(ast, env) |> Celixir.Checker.finalize_type()
+    inferred = ast |> Celixir.Checker.infer(env) |> Celixir.Checker.finalize_type()
     expected = test[:deduced_type]
 
     assert(
