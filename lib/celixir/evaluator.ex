@@ -723,7 +723,8 @@ defmodule Celixir.Evaluator do
   # Proto3 default values: scalar fields set to zero/false/empty are considered "not present"
   defp proto3_default_value?(nil), do: true
   defp proto3_default_value?(0), do: true
-  defp proto3_default_value?(0.0), do: true
+  defp proto3_default_value?(+0.0), do: true
+  defp proto3_default_value?(-0.0), do: true
   defp proto3_default_value?(false), do: true
   defp proto3_default_value?(""), do: true
   defp proto3_default_value?({:cel_bytes, <<>>}), do: true
