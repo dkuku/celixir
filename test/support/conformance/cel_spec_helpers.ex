@@ -5,40 +5,15 @@ defmodule Celixir.CelSpecHelpers do
 
   # Tests we know we can't pass yet (proto-specific, unsupported features)
   @skip_tests MapSet.new([
-                # Bytes value encoding (textproto parsing issue with invalid UTF-8 bytes)
-                {"basic", "self_eval_nonzeroish", "self_eval_bytes_invalid_utf8"},
-                # int(-9223372036854775808.0) — edge case at min int64 boundary
-                {"conversions", "int", "double_int_min_range"},
-                # string(b'\000\xff') — bytes to string with invalid UTF-8
-                {"conversions", "string", "bytes_invalid"},
-                # bytes('\377') == b'\377' — CEL bytes literal vs bytes() function encoding difference
-                {"conversions", "bytes", "string_unicode_vs_literal"},
-                # Unicode SMP escape in CEL string concatenation (U+1F431)
-                {"string", "concatenation", "ascii_unicode_unicode_smp"},
                 # Proto Any — var test needs textproto parser support for nested Any object_value bindings
                 {"dynamic", "any", "var"},
                 # Proto Any field_assign proto3 — needs container resolution for correct type_url
                 {"dynamic", "any", "field_assign_proto3"},
-                # Proto Any comparison — bytewise fallback tests need unresolvable type_url handling
-                {"comparisons", "eq_wrapper", "eq_proto2_any_unpack_bytewise_fallback_not_equal"},
-                {"comparisons", "eq_wrapper", "eq_proto2_any_unpack_bytewise_fallback_equal"},
-                {"comparisons", "eq_wrapper", "eq_proto3_any_unpack_bytewise_fallback_not_equal"},
-                {"comparisons", "eq_wrapper", "eq_proto3_any_unpack_bytewise_fallback_equal"},
-                {"comparisons", "ne_literal", "ne_proto2_any_unpack_bytewise_fallback"},
-                {"comparisons", "ne_literal", "ne_proto3_any_unpack_bytewise_fallback"},
                 # Nanosecond precision — Elixir DateTime only supports microseconds
                 {"timestamps", "timestamp_conversions", "toString_timestamp_nanos"},
-                # Nanosecond arithmetic at timestamp boundaries (sub-microsecond precision)
-                {"timestamps", "timestamp_range", "add_duration_nanos_over"},
-                {"timestamps", "timestamp_range", "add_duration_nanos_under"},
-                # Timestamp subtraction overflow (spec expects error for near-max durations)
-                {"timestamps", "timestamp_range", "sub_time_duration_over"},
-                {"timestamps", "timestamp_range", "sub_time_duration_under"},
                 # Float32 narrowing — requires single-precision float emulation
                 {"dynamic", "float", "literal_not_double"},
                 {"dynamic", "float", "field_assign_proto2_subnorm"},
-                {"dynamic", "float", "field_assign_proto3_range"},
-                {"dynamic", "float", "field_assign_proto3_round_to_zero"},
                 # Strong enum mode — requires enum types (not just ints)
                 {"enums", "strong_proto2", "type_global"},
                 {"enums", "strong_proto2", "type_nested"},

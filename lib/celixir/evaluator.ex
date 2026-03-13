@@ -17,6 +17,11 @@ defmodule Celixir.Evaluator do
   @int64_max 9_223_372_036_854_775_807
   @uint64_max 18_446_744_073_709_551_615
 
+  # Float boundaries for double-to-int/uint conversion (CEL spec uses exclusive bounds)
+  @int64_min_float -9_223_372_036_854_775_808.0
+  @int64_max_plus1_float 9_223_372_036_854_775_808.0
+  @uint64_max_plus1_float 18_446_744_073_709_551_616.0
+
   @spec eval(AST.expr(), Environment.t()) :: {:ok, any()} | {:error, String.t()}
   def eval(expr, env) do
     case do_eval(expr, env) do
@@ -1336,7 +1341,11 @@ defmodule Celixir.Evaluator do
         check_int(v)
 
       v when is_float(v) ->
-        check_int(trunc(v))
+        if v <= @int64_min_float or v >= @int64_max_plus1_float do
+          cel_error("integer overflow")
+        else
+          check_int(trunc(v))
+        end
 
       v when is_binary(v) ->
         case Integer.parse(v) do
@@ -1370,7 +1379,11 @@ defmodule Celixir.Evaluator do
         check_uint(v)
 
       v when is_float(v) ->
-        check_uint(trunc(v))
+        if v < 0.0 or v >= @uint64_max_plus1_float do
+          cel_error("unsigned integer overflow")
+        else
+          check_uint(trunc(v))
+        end
 
       v when is_binary(v) ->
         case Integer.parse(v) do
@@ -1438,7 +1451,8 @@ defmodule Celixir.Evaluator do
       true -> "true"
       false -> "false"
       nil -> "null"
-      {:cel_bytes, v} -> v
+      {:cel_bytes, v} ->
+        if String.valid?(v), do: v, else: cel_error("invalid UTF-8 in bytes-to-string conversion")
       %Timestamp{} = t -> Timestamp.to_string(t)
       %Duration{} = d -> Duration.to_string(d)
       {:cel_ip, addr} -> List.to_string(:inet.ntoa(addr))

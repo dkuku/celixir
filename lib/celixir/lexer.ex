@@ -148,7 +148,7 @@ defmodule Celixir.Lexer do
 
   # Bytes triple-quoted: b"""...""" or b'''...'''
   defp tokenize(<<b, ?\", ?\", ?\", rest::binary>>, line, acc) when b in [?b, ?B] do
-    case read_triple_string(rest, "\"", line, []) do
+    case read_triple_string(rest, "\"", line, [], :bytes) do
       {:ok, value, rest2, new_line} ->
         tokenize(rest2, new_line, [{:bytes, value, line} | acc])
 
@@ -158,7 +158,7 @@ defmodule Celixir.Lexer do
   end
 
   defp tokenize(<<b, ?\', ?\', ?\', rest::binary>>, line, acc) when b in [?b, ?B] do
-    case read_triple_string(rest, "'", line, []) do
+    case read_triple_string(rest, "'", line, [], :bytes) do
       {:ok, value, rest2, new_line} ->
         tokenize(rest2, new_line, [{:bytes, value, line} | acc])
 
@@ -202,7 +202,7 @@ defmodule Celixir.Lexer do
   defp tokenize(<<b, q, rest::binary>>, line, acc) when b in [?b, ?B] and q in [?", ?'] do
     quote_char = <<q>>
 
-    case read_string(rest, quote_char, line, []) do
+    case read_string(rest, quote_char, line, [], :bytes) do
       {:ok, value, rest, new_line} ->
         tokenize(rest, new_line, [{:bytes, value, line} | acc])
 
@@ -401,11 +401,13 @@ defmodule Celixir.Lexer do
   defp read_exponent(rest), do: {"", rest}
 
   # String reading with escape sequences
-  defp read_string(<<>>, _quote, line, _acc), do: {:error, "line #{line}: unterminated string"}
+  defp read_string(input, quote, line, acc), do: read_string(input, quote, line, acc, :string)
 
-  defp read_string(<<?\n, _::binary>>, _quote, line, _acc), do: {:error, "line #{line}: newline in string literal"}
+  defp read_string(<<>>, _quote, line, _acc, _mode), do: {:error, "line #{line}: unterminated string"}
 
-  defp read_string(input, quote, line, acc) do
+  defp read_string(<<?\n, _::binary>>, _quote, line, _acc, _mode), do: {:error, "line #{line}: newline in string literal"}
+
+  defp read_string(input, quote, line, acc, mode) do
     qlen = byte_size(quote)
 
     case input do
@@ -413,13 +415,13 @@ defmodule Celixir.Lexer do
         {:ok, acc |> Enum.reverse() |> IO.iodata_to_binary(), rest, line}
 
       <<"\\", rest::binary>> ->
-        case read_escape(rest, line) do
-          {:ok, char, rest2} -> read_string(rest2, quote, line, [char | acc])
+        case read_escape(rest, line, mode) do
+          {:ok, char, rest2} -> read_string(rest2, quote, line, [char | acc], mode)
           {:error, _} = err -> err
         end
 
       <<c::utf8, rest::binary>> ->
-        read_string(rest, quote, line, [<<c::utf8>> | acc])
+        read_string(rest, quote, line, [<<c::utf8>> | acc], mode)
     end
   end
 
@@ -458,7 +460,9 @@ defmodule Celixir.Lexer do
     end
   end
 
-  defp read_triple_string(input, quote, line, acc) do
+  defp read_triple_string(input, quote, line, acc), do: read_triple_string(input, quote, line, acc, :string)
+
+  defp read_triple_string(input, quote, line, acc, mode) do
     triple = String.duplicate(quote, 3)
 
     case input do
@@ -469,65 +473,67 @@ defmodule Celixir.Lexer do
         {:ok, acc |> Enum.reverse() |> IO.iodata_to_binary(), rest, line}
 
       <<?\n, rest::binary>> ->
-        read_triple_string(rest, quote, line + 1, ["\n" | acc])
+        read_triple_string(rest, quote, line + 1, ["\n" | acc], mode)
 
       <<"\\", rest::binary>> ->
-        case read_escape(rest, line) do
-          {:ok, char, rest2} -> read_triple_string(rest2, quote, line, [char | acc])
+        case read_escape(rest, line, mode) do
+          {:ok, char, rest2} -> read_triple_string(rest2, quote, line, [char | acc], mode)
           {:error, _} = err -> err
         end
 
       <<c::utf8, rest::binary>> ->
-        read_triple_string(rest, quote, line, [<<c::utf8>> | acc])
+        read_triple_string(rest, quote, line, [<<c::utf8>> | acc], mode)
     end
   end
 
-  defp read_escape(<<"a", rest::binary>>, _line), do: {:ok, "\a", rest}
-  defp read_escape(<<"b", rest::binary>>, _line), do: {:ok, "\b", rest}
-  defp read_escape(<<"f", rest::binary>>, _line), do: {:ok, "\f", rest}
-  defp read_escape(<<"n", rest::binary>>, _line), do: {:ok, "\n", rest}
-  defp read_escape(<<"r", rest::binary>>, _line), do: {:ok, "\r", rest}
-  defp read_escape(<<"t", rest::binary>>, _line), do: {:ok, "\t", rest}
-  defp read_escape(<<"v", rest::binary>>, _line), do: {:ok, "\v", rest}
-  defp read_escape(<<"\\", rest::binary>>, _line), do: {:ok, "\\", rest}
-  defp read_escape(<<"?", rest::binary>>, _line), do: {:ok, "?", rest}
-  defp read_escape(<<"\"", rest::binary>>, _line), do: {:ok, "\"", rest}
-  defp read_escape(<<"'", rest::binary>>, _line), do: {:ok, "'", rest}
-  defp read_escape(<<"`", rest::binary>>, _line), do: {:ok, "`", rest}
+  defp read_escape(<<"a", rest::binary>>, _line, _mode), do: {:ok, "\a", rest}
+  defp read_escape(<<"b", rest::binary>>, _line, _mode), do: {:ok, "\b", rest}
+  defp read_escape(<<"f", rest::binary>>, _line, _mode), do: {:ok, "\f", rest}
+  defp read_escape(<<"n", rest::binary>>, _line, _mode), do: {:ok, "\n", rest}
+  defp read_escape(<<"r", rest::binary>>, _line, _mode), do: {:ok, "\r", rest}
+  defp read_escape(<<"t", rest::binary>>, _line, _mode), do: {:ok, "\t", rest}
+  defp read_escape(<<"v", rest::binary>>, _line, _mode), do: {:ok, "\v", rest}
+  defp read_escape(<<"\\", rest::binary>>, _line, _mode), do: {:ok, "\\", rest}
+  defp read_escape(<<"?", rest::binary>>, _line, _mode), do: {:ok, "?", rest}
+  defp read_escape(<<"\"", rest::binary>>, _line, _mode), do: {:ok, "\"", rest}
+  defp read_escape(<<"'", rest::binary>>, _line, _mode), do: {:ok, "'", rest}
+  defp read_escape(<<"`", rest::binary>>, _line, _mode), do: {:ok, "`", rest}
 
   # Octal escape: \[0-3][0-7][0-7] — must come before \0 handler
-  defp read_escape(<<o1, o2, o3, rest::binary>>, _line) when o1 in ?0..?3 and o2 in ?0..?7 and o3 in ?0..?7 do
+  # In string mode, produces UTF-8 encoded code point; in bytes mode, raw byte
+  defp read_escape(<<o1, o2, o3, rest::binary>>, _line, mode) when o1 in ?0..?3 and o2 in ?0..?7 and o3 in ?0..?7 do
     value = (o1 - ?0) * 64 + (o2 - ?0) * 8 + (o3 - ?0)
-    {:ok, <<value>>, rest}
+    if mode == :bytes, do: {:ok, <<value>>, rest}, else: {:ok, <<value::utf8>>, rest}
   end
 
   # Null byte: \0 (not followed by octal digits — handled above)
-  defp read_escape(<<"0", rest::binary>>, _line), do: {:ok, <<0>>, rest}
+  defp read_escape(<<"0", rest::binary>>, _line, _mode), do: {:ok, <<0>>, rest}
 
   # Hex escape: \xHH
-  defp read_escape(<<x, h1, h2, rest::binary>>, _line) when x in [?x, ?X] do
+  # In string mode, produces UTF-8 encoded code point; in bytes mode, raw byte
+  defp read_escape(<<x, h1, h2, rest::binary>>, _line, mode) when x in [?x, ?X] do
     with {:ok, v} <- hex_value(<<h1, h2>>) do
-      {:ok, <<v>>, rest}
+      if mode == :bytes, do: {:ok, <<v>>, rest}, else: {:ok, <<v::utf8>>, rest}
     end
   end
 
   # Unicode escape: \uHHHH
-  defp read_escape(<<"u", h1, h2, h3, h4, rest::binary>>, _line) do
+  defp read_escape(<<"u", h1, h2, h3, h4, rest::binary>>, _line, _mode) do
     with {:ok, v} <- hex_value(<<h1, h2, h3, h4>>) do
       {:ok, <<v::utf8>>, rest}
     end
   end
 
   # Unicode escape: \UHHHHHHHH
-  defp read_escape(<<"U", h1, h2, h3, h4, h5, h6, h7, h8, rest::binary>>, _line) do
+  defp read_escape(<<"U", h1, h2, h3, h4, h5, h6, h7, h8, rest::binary>>, _line, _mode) do
     with {:ok, v} <- hex_value(<<h1, h2, h3, h4, h5, h6, h7, h8>>) do
       {:ok, <<v::utf8>>, rest}
     end
   end
 
-  defp read_escape(<<c, _::binary>>, line), do: {:error, "line #{line}: invalid escape sequence '\\#{<<c>>}'"}
+  defp read_escape(<<c, _::binary>>, line, _mode), do: {:error, "line #{line}: invalid escape sequence '\\#{<<c>>}'"}
 
-  defp read_escape(<<>>, line), do: {:error, "line #{line}: unterminated escape sequence"}
+  defp read_escape(<<>>, line, _mode), do: {:error, "line #{line}: unterminated escape sequence"}
 
   defp hex_value(hex_str) do
     case Integer.parse(hex_str, 16) do
