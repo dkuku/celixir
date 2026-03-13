@@ -5,8 +5,7 @@ defmodule Celixir.CelSpecHelpers do
 
   # Tests we know we can't pass yet (proto-specific, unsupported features)
   @skip_tests MapSet.new([
-                # Proto field access — evaluator doesn't have proto schema for these fields
-                {"type_deductions", "field_access", "map_bool_int"},
+                # Proto field access — evaluator needs Duration/Timestamp default values for message fields
                 {"type_deductions", "legacy_nullable_types", "null_assignable_to_duration_parameter_candidate"},
                 {"type_deductions", "legacy_nullable_types", "null_assignable_to_timestamp_parameter_candidate"},
                 # Proto Any — var test needs textproto parser support for nested Any object_value bindings
@@ -25,21 +24,11 @@ defmodule Celixir.CelSpecHelpers do
                 {"enums", "strong_proto3", "type_global"},
                 {"enums", "strong_proto3", "type_nested"},
                 {"enums", "strong_proto3", "field_type"},
-                # Proto2/Proto3 has() default semantics — requires container-aware proto version tracking
-                {"proto3", "has", "single_set_to_default"},
-                {"proto3", "has", "single_enum_set_zero"},
                 # Proto2 scalar_with_default — proto2 field defaults differ from proto3
                 {"proto2", "empty_field", "scalar_with_default"},
                 # Proto Any literal encoding — requires proto binary serialization
                 {"proto2", "literal_wellknown", "any"},
                 {"proto3", "literal_wellknown", "any"},
-                # Proto literal_wellknown — requires proto-encoded representation for Duration/Timestamp/Struct
-                {"proto2", "literal_wellknown", "duration"},
-                {"proto3", "literal_wellknown", "duration"},
-                {"proto2", "literal_wellknown", "timestamp"},
-                {"proto3", "literal_wellknown", "timestamp"},
-                {"proto2", "literal_wellknown", "struct"},
-                {"proto3", "literal_wellknown", "struct"},
                 # Block ext with deeply nested proto struct bindings — textproto parser lacks nested type awareness
                 {"block_ext", "basic", "select_nested_1"},
                 {"block_ext", "basic", "select_nested_message_map_index_1"},
@@ -365,10 +354,40 @@ defmodule Celixir.CelSpecHelpers do
     do: normalize_for_compare(actual) == normalize_for_compare(inner)
 
   defp proto_value_matches?(%{} = e, _actual) when map_size(e) == 0, do: true
-  defp proto_value_matches?(%{"bool_value" => v}, actual), do: actual == v
-  defp proto_value_matches?(%{"number_value" => v}, actual), do: actual == v * 1.0
-  defp proto_value_matches?(%{"string_value" => v}, actual), do: actual == v
+
+  # Duration: match %{"seconds" => s, "nanos" => n} against Duration struct
+  defp proto_value_matches?(%{"seconds" => _} = expected, %Celixir.Types.Duration{} = dur) do
+    expected_seconds = Map.get(expected, "seconds", 0)
+    expected_nanos = Map.get(expected, "nanos", 0)
+    total_nanos = Celixir.Types.Duration.to_total_nanos(dur)
+    total_nanos == expected_seconds * 1_000_000_000 + expected_nanos
+  end
+
+  # Timestamp: match %{"seconds" => s, "nanos" => n} against Timestamp struct
+  defp proto_value_matches?(%{"seconds" => _} = expected, %Celixir.Types.Timestamp{} = ts) do
+    expected_seconds = Map.get(expected, "seconds", 0)
+    expected_nanos = Map.get(expected, "nanos", 0)
+    {actual_seconds, actual_nanos} = Celixir.Types.Timestamp.to_proto(ts)
+    actual_seconds == expected_seconds and actual_nanos == expected_nanos
+  end
+
+  # Struct (google.protobuf.Struct) fields compare as maps
+  defp proto_value_matches?(%{"fields" => expected_fields}, actual) when is_map(actual) do
+    Enum.all?(expected_fields, fn {k, v} ->
+      actual_v = Map.get(actual, k)
+      proto_value_matches?(v, actual_v)
+    end)
+  end
+
+  # Proto Value wrappers: number_value, string_value, bool_value, null_value
+  defp proto_value_matches?(%{"number_value" => expected}, actual) do
+    normalize_for_compare(actual) * 1.0 == expected * 1.0
+  end
+
+  defp proto_value_matches?(%{"string_value" => expected}, actual), do: actual == expected
+  defp proto_value_matches?(%{"bool_value" => expected}, actual), do: actual == expected
   defp proto_value_matches?(%{"null_value" => _}, actual), do: actual == nil
+
 
   defp proto_value_matches?(%{"values" => expected_vals}, actual) when is_list(actual) do
     length(expected_vals) == length(actual) and

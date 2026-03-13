@@ -553,6 +553,7 @@ defmodule Celixir.Proto do
       "repeated_value" => {:repeated, {:message, "google.protobuf.Value"}},
       # Map fields
       "map_int64_nested_type" => {:map, :int64, {:message, "NestedTestAllTypes"}},
+      "map_bool_int64" => {:map, :bool, :int64},
       "map_bool_bool" => {:map, :bool, :bool},
       "map_bool_string" => {:map, :bool, :string},
       "map_bool_bytes" => {:map, :bool, :bytes},

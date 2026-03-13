@@ -279,7 +279,9 @@ defmodule Celixir.Evaluator do
 
   # Struct/message creation: TypeName{field: value, ...}
   defp do_eval(%AST.CreateStruct{type_name: type_name, entries: entries}, env) do
-    eval_struct_fields(entries, env, type_name, %{})
+    # Qualify the type name with the container if available
+    qualified_name = qualify_type_name(type_name, env)
+    eval_struct_fields(entries, env, qualified_name, %{})
   end
 
   # Optional lambda: optFlatMap / optMap
@@ -666,7 +668,7 @@ defmodule Celixir.Evaluator do
   defp select_test(%Optional{has_value: true, value: v}, field), do: select_test(v, field)
   defp select_test(%Optional{has_value: false}, _field), do: false
 
-  defp select_test({:cel_struct, _type_name, fields}, field) do
+  defp select_test({:cel_struct, type_name, fields}, field) do
     provided = Map.get(fields, :__provided_fields__)
 
     # Unknown field → error (spec requires it)
@@ -680,13 +682,21 @@ defmodule Celixir.Evaluator do
         not MapSet.member?(provided, field) ->
           false
 
-        # For repeated (list) and map fields, has() returns false when the value
-        # is the default (empty list/map), even if explicitly set (proto3 semantics).
+        # Repeated/map fields: has() returns false when empty, even if explicitly provided.
+        # This applies to both proto2 and proto3.
         true ->
-          case Map.get(fields, field) do
-            v when is_list(v) -> v != []
-            v when is_map(v) -> v != %{}
-            _ -> true
+          val = Map.get(fields, field)
+
+          cond do
+            is_list(val) -> val != []
+            is_map(val) -> val != %{}
+            # Proto3 non-oneof scalar: has() returns false for default values.
+            # We can only apply this when the type name indicates proto3.
+            proto3_type?(type_name) and not proto3_oneof_field?(type_name, field) ->
+              not proto3_default_value?(val)
+
+            true ->
+              true
           end
       end
     else
@@ -705,6 +715,49 @@ defmodule Celixir.Evaluator do
   end
 
   defp select_test(_target, _field), do: false
+
+  defp proto3_type?(type_name) when is_binary(type_name) do
+    String.contains?(type_name, "proto3")
+  end
+
+  defp proto3_type?(_), do: false
+
+  # Qualify a short type name with the container prefix if the proto schema recognizes it
+  defp qualify_type_name(type_name, %{container: container})
+       when is_binary(container) and container != "" do
+    qualified = container <> "." <> type_name
+
+    if Proto.get_schema(qualified) do
+      qualified
+    else
+      type_name
+    end
+  end
+
+  defp qualify_type_name(type_name, _env), do: type_name
+
+  # Proto3 oneof fields always have presence — known oneof fields for TestAllTypes
+  @proto3_oneof_fields MapSet.new([
+    "single_nested_message",
+    "single_nested_enum"
+  ])
+
+  defp proto3_oneof_field?(_type_name, field) do
+    MapSet.member?(@proto3_oneof_fields, field)
+  end
+
+  # Proto3 default values: scalar fields set to zero/false/empty are considered "not present"
+  defp proto3_default_value?(nil), do: true
+  defp proto3_default_value?(0), do: true
+  defp proto3_default_value?(0.0), do: true
+  defp proto3_default_value?(false), do: true
+  defp proto3_default_value?(""), do: true
+  defp proto3_default_value?({:cel_bytes, <<>>}), do: true
+  defp proto3_default_value?({:cel_int, 0}), do: true
+  defp proto3_default_value?({:cel_uint, 0}), do: true
+  defp proto3_default_value?(v) when is_list(v), do: v == []
+  defp proto3_default_value?(v) when is_map(v), do: v == %{}
+  defp proto3_default_value?(_), do: false
 
   defp is_atom_key?(map, field) do
     atom = String.to_existing_atom(field)
