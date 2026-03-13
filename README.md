@@ -53,12 +53,118 @@ Celixir.Program.eval(program, %{
 
 ## Custom Functions
 
+Extend CEL with your own functions written in Elixir. Custom functions receive
+plain Elixir values (unwrapped from CEL internal types) and should return plain
+Elixir values.
+
+### Basic function
+
 ```elixir
 env = Celixir.Environment.new(%{name: "world"})
       |> Celixir.Environment.put_function("greet", fn name -> "Hello, #{name}!" end)
 
 Celixir.eval!("greet(name)", env)
 # => "Hello, world!"
+```
+
+### Multi-argument functions
+
+```elixir
+env = Celixir.Environment.new()
+      |> Celixir.Environment.put_function("clamp", fn val, lo, hi ->
+        val |> max(lo) |> min(hi)
+      end)
+
+Celixir.eval!("clamp(150, 0, 100)", env)
+# => 100
+```
+
+### Using module functions
+
+```elixir
+defmodule MyFunctions do
+  def factorial(0), do: 1
+  def factorial(n) when n > 0, do: n * factorial(n - 1)
+end
+
+env = Celixir.Environment.new()
+      |> Celixir.Environment.put_function("factorial", &MyFunctions.factorial/1)
+
+Celixir.eval!("factorial(5)", env)
+# => 120
+```
+
+### Namespaced functions
+
+Use dot-separated names to organize functions into logical groups:
+
+```elixir
+env = Celixir.Environment.new()
+      |> Celixir.Environment.put_function("str.reverse", fn s ->
+        s |> String.graphemes() |> Enum.reverse() |> Enum.join()
+      end)
+      |> Celixir.Environment.put_function("str.repeat", fn s, n ->
+        String.duplicate(s, n)
+      end)
+
+Celixir.eval!(~S|str.reverse("hello")|, env)
+# => "olleh"
+
+Celixir.eval!(~S|str.repeat("ab", 3)|, env)
+# => "ababab"
+```
+
+### Building a function library
+
+Group related functions into a module that configures an environment:
+
+```elixir
+defmodule MyApp.CelLibrary do
+  alias Celixir.Environment
+
+  def register(env \\ Environment.new()) do
+    env
+    |> Environment.put_function("slugify", &slugify/1)
+    |> Environment.put_function("format.currency", &format_currency/2)
+    |> Environment.put_function("format.percent", &format_percent/1)
+  end
+
+  defp slugify(s) do
+    s |> String.downcase() |> String.replace(~r/[^a-z0-9]+/, "-") |> String.trim("-")
+  end
+
+  defp format_currency(amount, currency) do
+    "#{currency} #{:erlang.float_to_binary(amount / 1.0, decimals: 2)}"
+  end
+
+  defp format_percent(ratio) do
+    "#{round(ratio * 100)}%"
+  end
+end
+
+env = MyApp.CelLibrary.register()
+      |> Celixir.Environment.put_variable("title", "Hello World!")
+
+Celixir.eval!(~S|slugify(title)|, env)
+# => "hello-world"
+
+Celixir.eval!(~S|format.currency(29.9, "USD")|, env)
+# => "USD 29.90"
+```
+
+### Using with `Celixir.Program` (compile once, evaluate many)
+
+```elixir
+env = Celixir.Environment.new()
+      |> Celixir.Environment.put_function("discount", fn price, pct -> price * (1 - pct) end)
+
+{:ok, program} = Celixir.compile("discount(price, 0.1)")
+
+Celixir.Program.eval(program, env |> Celixir.Environment.put_variable("price", 100))
+# => {:ok, 90.0}
+
+Celixir.Program.eval(program, env |> Celixir.Environment.put_variable("price", 50))
+# => {:ok, 45.0}
 ```
 
 ## Compile-Time Sigil

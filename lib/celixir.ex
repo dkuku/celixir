@@ -55,11 +55,46 @@ defmodule Celixir do
 
   ## Custom Functions
 
+  Register Elixir functions to call from CEL expressions. Functions receive
+  plain Elixir values and should return plain Elixir values.
+
+      # Simple function
       env = Celixir.Environment.new(%{name: "world"})
             |> Celixir.Environment.put_function("greet", fn name -> "Hello, \#{name}!" end)
 
       Celixir.eval("greet(name)", env)
       # => {:ok, "Hello, world!"}
+
+      # Multi-argument
+      env = Celixir.Environment.new()
+            |> Celixir.Environment.put_function("clamp", fn val, lo, hi ->
+              val |> max(lo) |> min(hi)
+            end)
+
+      Celixir.eval("clamp(150, 0, 100)", env)
+      # => {:ok, 100}
+
+      # Module function reference
+      env = Celixir.Environment.new()
+            |> Celixir.Environment.put_function("factorial", &MyMath.factorial/1)
+
+      # Namespaced functions (dot-separated names)
+      env = Celixir.Environment.new()
+            |> Celixir.Environment.put_function("str.reverse", &MyString.reverse/1)
+            |> Celixir.Environment.put_function("str.repeat", &MyString.repeat/2)
+
+  To build a reusable function library, group registrations in a module:
+
+      defmodule MyApp.CelLibrary do
+        def register(env \\\\ Celixir.Environment.new()) do
+          env
+          |> Celixir.Environment.put_function("slugify", &slugify/1)
+          |> Celixir.Environment.put_function("format.currency", &format_currency/2)
+        end
+
+        defp slugify(s), do: s |> String.downcase() |> String.replace(~r/[^a-z0-9]+/, "-")
+        defp format_currency(amount, cur), do: "\#{cur} \#{:erlang.float_to_binary(amount / 1.0, decimals: 2)}"
+      end
   """
 
   alias Celixir.Environment

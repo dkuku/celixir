@@ -1,7 +1,50 @@
 defmodule Celixir.Environment do
   @moduledoc """
   Execution environment for CEL expressions.
-  Holds variable bindings and function definitions.
+  Holds variable bindings, custom function definitions, and an optional type adapter.
+
+  ## Building an environment
+
+      env = Celixir.Environment.new(%{x: 10, name: "alice"})
+
+  ## Registering custom functions
+
+  Use `put_function/3` to register Elixir functions callable from CEL.
+  Functions receive plain Elixir values (unwrapped from CEL internal types)
+  and should return plain Elixir values.
+
+      env = Celixir.Environment.new()
+            |> Celixir.Environment.put_function("double", fn x -> x * 2 end)
+            |> Celixir.Environment.put_function("math.clamp", fn v, lo, hi ->
+              v |> max(lo) |> min(hi)
+            end)
+
+  You can also pass module function captures:
+
+      env = Celixir.Environment.new()
+            |> Celixir.Environment.put_function("slugify", &MyApp.Helpers.slugify/1)
+
+  ## Building reusable libraries
+
+  Group related functions into a module that configures an environment:
+
+      defmodule MyApp.CelLibrary do
+        alias Celixir.Environment
+
+        def register(env \\\\ Environment.new()) do
+          env
+          |> Environment.put_function("format.currency", &format_currency/2)
+          |> Environment.put_function("format.percent", &format_percent/1)
+        end
+
+        defp format_currency(amount, cur), do: "\#{cur} \#{amount}"
+        defp format_percent(ratio), do: "\#{round(ratio * 100)}%"
+      end
+
+      env = MyApp.CelLibrary.register()
+            |> Celixir.Environment.put_variable("price", 29.9)
+
+      Celixir.eval!("format.currency(price, 'USD')", env)
   """
 
   defstruct variables: %{}, functions: %{}, type_adapter: nil

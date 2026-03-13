@@ -245,6 +245,189 @@ defmodule CelixirTest do
 
       assert Celixir.eval!("double(21)", env) == 42
     end
+
+    test "multi-argument function" do
+      env =
+        Celixir.Environment.new()
+        |> Celixir.Environment.put_function("clamp", fn val, lo, hi ->
+          val |> max(lo) |> min(hi)
+        end)
+
+      assert Celixir.eval!("clamp(150, 0, 100)", env) == 100
+      assert Celixir.eval!("clamp(-5, 0, 100)", env) == 0
+      assert Celixir.eval!("clamp(50, 0, 100)", env) == 50
+    end
+
+    test "function returning string" do
+      env =
+        Celixir.Environment.new(%{name: "world"})
+        |> Celixir.Environment.put_function("greet", fn name -> "Hello, #{name}!" end)
+
+      assert Celixir.eval!("greet(name)", env) == "Hello, world!"
+    end
+
+    test "function returning bool" do
+      env =
+        Celixir.Environment.new()
+        |> Celixir.Environment.put_function("is_even", fn x -> rem(x, 2) == 0 end)
+
+      assert Celixir.eval!("is_even(4)", env) == true
+      assert Celixir.eval!("is_even(3)", env) == false
+    end
+
+    test "function returning list" do
+      env =
+        Celixir.Environment.new()
+        |> Celixir.Environment.put_function("range", fn n -> Enum.to_list(1..n) end)
+
+      assert Celixir.eval!("range(3)", env) == [1, 2, 3]
+    end
+
+    test "function returning map" do
+      env =
+        Celixir.Environment.new()
+        |> Celixir.Environment.put_function("make_pair", fn k, v -> %{k => v} end)
+
+      assert Celixir.eval!(~S|make_pair("a", 1)|, env) == %{"a" => 1}
+    end
+
+    test "result used in arithmetic" do
+      env =
+        Celixir.Environment.new()
+        |> Celixir.Environment.put_function("double", fn x -> x * 2 end)
+
+      assert Celixir.eval!("double(21) + 1", env) == 43
+      assert Celixir.eval!("double(5) * 3", env) == 30
+      assert Celixir.eval!("100 - double(10)", env) == 80
+    end
+
+    test "result used in comparison" do
+      env =
+        Celixir.Environment.new()
+        |> Celixir.Environment.put_function("double", fn x -> x * 2 end)
+
+      assert Celixir.eval!("double(21) > 40", env) == true
+      assert Celixir.eval!("double(21) == 42", env) == true
+      assert Celixir.eval!("double(21) != 0", env) == true
+      assert Celixir.eval!("double(21) < 100", env) == true
+    end
+
+    test "result used in ternary" do
+      env =
+        Celixir.Environment.new()
+        |> Celixir.Environment.put_function("double", fn x -> x * 2 end)
+
+      assert Celixir.eval!("double(5) > 0 ? 'positive' : 'negative'", env) == "positive"
+    end
+
+    test "result used in logical expression" do
+      env =
+        Celixir.Environment.new()
+        |> Celixir.Environment.put_function("is_even", fn x -> rem(x, 2) == 0 end)
+
+      assert Celixir.eval!("is_even(4) && is_even(6)", env) == true
+      assert Celixir.eval!("is_even(3) || is_even(6)", env) == true
+      assert Celixir.eval!("!is_even(3)", env) == true
+    end
+
+    test "nested custom function calls" do
+      env =
+        Celixir.Environment.new()
+        |> Celixir.Environment.put_function("double", fn x -> x * 2 end)
+
+      assert Celixir.eval!("double(double(5))", env) == 20
+      assert Celixir.eval!("double(double(double(1)))", env) == 8
+    end
+
+    test "result in list literal" do
+      env =
+        Celixir.Environment.new()
+        |> Celixir.Environment.put_function("double", fn x -> x * 2 end)
+
+      assert Celixir.eval!("[double(1), double(2), double(3)]", env) == [2, 4, 6]
+    end
+
+    test "result in map literal" do
+      env =
+        Celixir.Environment.new()
+        |> Celixir.Environment.put_function("double", fn x -> x * 2 end)
+
+      assert Celixir.eval!("{'a': double(1), 'b': double(2)}", env) == %{"a" => 2, "b" => 4}
+    end
+
+    test "result as argument to builtin function" do
+      env =
+        Celixir.Environment.new()
+        |> Celixir.Environment.put_function("make_list", fn n -> Enum.to_list(1..n) end)
+
+      assert Celixir.eval!("size(make_list(5))", env) == 5
+    end
+
+    test "result used with string methods" do
+      env =
+        Celixir.Environment.new()
+        |> Celixir.Environment.put_function("greet", fn name -> "Hello, #{name}!" end)
+
+      assert Celixir.eval!(~S|greet("world").startsWith("Hello")|, env) == true
+      assert Celixir.eval!(~S|greet("world").size()|, env) == 13
+    end
+
+    test "result used with in operator" do
+      env =
+        Celixir.Environment.new()
+        |> Celixir.Environment.put_function("double", fn x -> x * 2 end)
+
+      assert Celixir.eval!("double(1) in [1, 2, 3]", env) == true
+      assert Celixir.eval!("double(5) in [1, 2, 3]", env) == false
+    end
+
+    test "mixed custom and builtin function calls" do
+      env =
+        Celixir.Environment.new()
+        |> Celixir.Environment.put_function("double", fn x -> x * 2 end)
+
+      assert Celixir.eval!("double(size([1, 2, 3]))", env) == 6
+      assert Celixir.eval!("int(double(2.5))", env) == 5
+    end
+
+    test "namespaced function" do
+      env =
+        Celixir.Environment.new()
+        |> Celixir.Environment.put_function("str.repeat", fn s, n ->
+          String.duplicate(s, n)
+        end)
+
+      assert Celixir.eval!(~S|str.repeat("ab", 3)|, env) == "ababab"
+    end
+
+    test "multiple custom functions together" do
+      env =
+        Celixir.Environment.new()
+        |> Celixir.Environment.put_function("add", fn a, b -> a + b end)
+        |> Celixir.Environment.put_function("mul", fn a, b -> a * b end)
+
+      assert Celixir.eval!("add(mul(2, 3), mul(4, 5))", env) == 26
+    end
+
+    test "custom function with variable binding" do
+      env =
+        Celixir.Environment.new(%{x: 10, y: 20})
+        |> Celixir.Environment.put_function("add", fn a, b -> a + b end)
+
+      assert Celixir.eval!("add(x, y)", env) == 30
+      assert Celixir.eval!("add(x, y) + 5", env) == 35
+    end
+
+    test "result used in comprehension" do
+      env =
+        Celixir.Environment.new()
+        |> Celixir.Environment.put_function("make_list", fn n -> Enum.to_list(1..n) end)
+
+      assert Celixir.eval!("make_list(5).filter(x, x > 3)", env) == [4, 5]
+      assert Celixir.eval!("make_list(4).map(x, x * 10)", env) == [10, 20, 30, 40]
+      assert Celixir.eval!("make_list(3).all(x, x > 0)", env) == true
+      assert Celixir.eval!("make_list(3).exists(x, x == 2)", env) == true
+    end
   end
 
   describe "complex expressions" do

@@ -1238,7 +1238,7 @@ defmodule Celixir.Evaluator do
 
   defp call_function(name, args, env) do
     case Environment.get_function(env, name) do
-      {:ok, func} -> apply(func, unwrap_args(args))
+      {:ok, func} -> func |> apply(unwrap_args(args)) |> wrap_value()
       :error -> call_builtin(name, args, env)
     end
   end
@@ -2051,7 +2051,7 @@ defmodule Celixir.Evaluator do
     all_args = [target | args]
 
     case Environment.get_function(env, name) do
-      {:ok, func} -> apply(func, unwrap_args(all_args))
+      {:ok, func} -> func |> apply(unwrap_args(all_args)) |> wrap_value()
       :error -> cel_error("no_matching_overload: #{name}() on #{cel_typeof(target)}")
     end
   end
@@ -2116,6 +2116,20 @@ defmodule Celixir.Evaluator do
   defp unwrap_value({:cel_uint, v}), do: v
   defp unwrap_value({:cel_bytes, v}), do: v
   defp unwrap_value(v), do: v
+
+  # Re-wrap plain Elixir values returned by custom functions into CEL tagged types.
+  defp wrap_value(v) when is_integer(v), do: {:cel_int, v}
+  defp wrap_value(v) when is_float(v), do: v
+  defp wrap_value(v) when is_boolean(v), do: v
+  defp wrap_value(v) when is_binary(v), do: v
+  defp wrap_value(nil), do: nil
+  defp wrap_value(v) when is_list(v), do: Enum.map(v, &wrap_value/1)
+
+  defp wrap_value(v) when is_map(v) and not is_struct(v) do
+    Map.new(v, fn {k, val} -> {wrap_value(k), wrap_value(val)} end)
+  end
+
+  defp wrap_value(v), do: v
 
   defp find_last(string, pattern) do
     case :binary.matches(string, pattern) do
