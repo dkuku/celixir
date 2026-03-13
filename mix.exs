@@ -2,7 +2,7 @@ defmodule Celixir.MixProject do
   use Mix.Project
 
   @version "0.1.0"
-  @source_url "https://github.com/celixir/celixir"
+  @source_url "https://github.com/dkuku/celixir"
 
   def project do
     [

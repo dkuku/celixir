@@ -219,7 +219,7 @@ Optional pre-evaluation type validation:
 
 ## CEL Spec Conformance
 
-Celixir passes 380/384 (99%) of the official [cel-spec](https://github.com/google/cel-spec) conformance tests across 8 test suites: basic, integer_math, fp_math, string, lists, macros, conversions, and plumbing.
+Celixir passes 2400/2427 (99%) of the upstream [cel-spec](https://github.com/google/cel-spec) conformance tests across 30 test suites covering arithmetic, strings, lists, comparisons, logic, macros, conversions, timestamps, protobuf field access, namespaces, optionals, type deductions, and more.
 
 ## License
 
