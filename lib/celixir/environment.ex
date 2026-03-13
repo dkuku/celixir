@@ -47,12 +47,14 @@ defmodule Celixir.Environment do
       Celixir.eval!("format.currency(price, 'USD')", env)
   """
 
-  defstruct variables: %{}, functions: %{}, type_adapter: nil
+  defstruct variables: %{}, functions: %{}, type_adapter: nil, container: nil, locals: %{}
 
   @type t :: %__MODULE__{
           variables: %{String.t() => any()},
           functions: %{String.t() => function()},
-          type_adapter: module() | nil
+          type_adapter: module() | nil,
+          container: String.t() | nil,
+          locals: %{String.t() => any()}
         }
 
   @doc "Creates a new empty environment."
@@ -68,12 +70,62 @@ defmodule Celixir.Environment do
     %{env | variables: Map.put(env.variables, to_string(name), value)}
   end
 
-  @doc "Looks up a variable."
+  @doc "Adds a local variable binding that shadows container-resolved and outer names."
+  def put_local(%__MODULE__{} = env, name, value) do
+    %{env | locals: Map.put(env.locals, to_string(name), value)}
+  end
+
+  @doc "Sets the container (namespace) for identifier resolution."
+  def set_container(%__MODULE__{} = env, container) do
+    %{env | container: container}
+  end
+
+  @doc """
+  Looks up a variable with proper resolution order:
+  - Absolute names (`.y`) bypass locals and container, look up in outer variables only
+  - Local names check locals first (comprehension iter vars, cel.bind), then container-resolved outer vars
+  """
   def get_variable(%__MODULE__{} = env, name) do
-    case Map.fetch(env.variables, name) do
-      {:ok, _} = ok -> ok
-      :error -> :error
+    if String.starts_with?(name, ".") do
+      # Absolute: bypass locals and container, look up in outer variables only
+      bare = String.trim_leading(name, ".")
+      Map.fetch(env.variables, bare)
+    else
+      # Check local scope first (comprehension/bind vars shadow everything)
+      case Map.fetch(env.locals, name) do
+        {:ok, _} = ok -> ok
+        :error -> resolve_with_container(env, name)
+      end
     end
+  end
+
+  @doc "Checks if a variable name is locally bound (e.g., comprehension iter var)."
+  def local?(env, name), do: Map.has_key?(env.locals, to_string(name))
+
+  defp resolve_with_container(%{container: nil} = env, name) do
+    Map.fetch(env.variables, name)
+  end
+
+  defp resolve_with_container(%{container: container} = env, name) do
+    # Try progressively shorter container prefixes: com.example.y, com.y, y
+    prefixes = container_prefixes(container)
+
+    Enum.find_value(prefixes, fn prefix ->
+      qualified = prefix <> "." <> name
+
+      case Map.fetch(env.variables, qualified) do
+        {:ok, _} = ok -> ok
+        :error -> nil
+      end
+    end) || Map.fetch(env.variables, name)
+  end
+
+  defp container_prefixes(container) do
+    parts = String.split(container, ".")
+    # ["com.example", "com"] for container "com.example"
+    Enum.map(length(parts)..1//-1, fn n ->
+      parts |> Enum.take(n) |> Enum.join(".")
+    end)
   end
 
   @doc "Registers a custom function."

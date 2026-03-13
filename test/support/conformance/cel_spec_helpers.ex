@@ -51,15 +51,6 @@ defmodule Celixir.CelSpecHelpers do
                 {"proto2_ext", "has_ext", "package_scoped_test_all_types_ext"},
                 {"proto2_ext", "has_ext", "package_scoped_test_all_types_nested_enum_ext"},
                 {"proto2_ext", "has_ext", "package_scoped_repeated_test_all_types"},
-                # Namespace/container resolution — requires container-aware identifier resolution
-                {"namespace", "namespace", "self_eval_container_lookup"},
-                {"namespace", "namespace", "self_eval_container_lookup_unchecked"},
-                {"namespace", "namespace_shadowing", "basic"},
-                {"namespace", "namespace_shadowing", "disambiguation"},
-                {"namespace", "namespace_shadowing", "comprehension_shadowing_disambiguation"},
-                {"namespace", "namespace_shadowing", "comprehension_shadowing_selector"},
-                {"namespace", "namespace_shadowing", "comprehension_shadowing_selector_parse_only"},
-                {"namespace", "namespace_shadowing", "comprehension_shadowing_namespaced_selector_disambiguation"},
                 # Nanosecond precision in wrapper to_json (Elixir DateTime only supports microseconds)
                 {"wrappers", "timestamp", "to_json"}
               ])
@@ -98,7 +89,10 @@ defmodule Celixir.CelSpecHelpers do
   def run_cel_spec_test(_file, _section, test) do
     bindings = convert_bindings(test.bindings)
 
-    case Celixir.eval(test.expr, bindings) do
+    env = Celixir.Environment.new(bindings)
+    env = if test[:container], do: Celixir.Environment.set_container(env, test.container), else: env
+
+    case Celixir.eval(test.expr, env) do
       {:ok, actual} ->
         if test.eval_error do
           flunk("Expected error for: #{test.expr}, but got: #{inspect(actual)}")

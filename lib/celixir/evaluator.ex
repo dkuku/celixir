@@ -109,15 +109,24 @@ defmodule Celixir.Evaluator do
         type_val
 
       :not_type ->
-        # Try to resolve as a qualified variable name (e.g., a.b.c from bindings)
-        case try_qualified_variable(operand, field, env) do
-          {:ok, val} ->
-            if test_only, do: val != nil, else: normalize(val)
+        # If the base of the select chain is a local variable (comprehension iter var,
+        # cel.bind var), field access takes priority over qualified variable lookup.
+        if operand_is_local?(operand, env) do
+          with_value(do_eval(operand, env), fn target ->
+            if test_only, do: select_test(target, field), else: select_field(target, field)
+          end)
+        else
+          # For non-local operands, try qualified variable name first (longest prefix wins),
+          # then fall back to evaluating operand + field access.
+          case try_qualified_variable(operand, field, env) do
+            {:ok, val} ->
+              if test_only, do: val != nil, else: normalize(val)
 
-          :not_var ->
-            with_value(do_eval(operand, env), fn target ->
-              if test_only, do: select_test(target, field), else: select_field(target, field)
-            end)
+            :not_var ->
+              with_value(do_eval(operand, env), fn target ->
+                if test_only, do: select_test(target, field), else: select_field(target, field)
+              end)
+          end
         end
     end
   end
@@ -329,7 +338,7 @@ defmodule Celixir.Evaluator do
       |> Enum.with_index()
       |> Enum.reduce(env, fn {binding_expr, idx}, acc_env ->
         val = do_eval(binding_expr, acc_env)
-        Environment.put_variable(acc_env, "__cel_block_#{idx}__", val)
+        Environment.put_local(acc_env, "__cel_block_#{idx}__", val)
       end)
 
     do_eval(result, env2)
@@ -370,7 +379,7 @@ defmodule Celixir.Evaluator do
         end
 
       with {:ok, final_acc} <- ensure_value(final_acc) do
-        result_env = Environment.put_variable(env, comp.acc_var, final_acc)
+        result_env = Environment.put_local(env, comp.acc_var, final_acc)
         do_eval(comp.result, result_env)
       end
     end
@@ -389,13 +398,13 @@ defmodule Celixir.Evaluator do
   end
 
   defp bind_iter_vars(env, comp, {var1_val}) do
-    Environment.put_variable(env, comp.iter_var, var1_val)
+    Environment.put_local(env, comp.iter_var, var1_val)
   end
 
   defp bind_iter_vars(env, comp, {var1_val, var2_val}) do
     env
-    |> Environment.put_variable(comp.iter_var, var1_val)
-    |> Environment.put_variable(comp.iter_var2, var2_val)
+    |> Environment.put_local(comp.iter_var, var1_val)
+    |> Environment.put_local(comp.iter_var2, var2_val)
   end
 
   defp eval_standard_comprehension(items, comp, acc, env) do
@@ -403,7 +412,7 @@ defmodule Celixir.Evaluator do
       loop_env =
         env
         |> bind_iter_vars(comp, item)
-        |> Environment.put_variable(comp.acc_var, current_acc)
+        |> Environment.put_local(comp.acc_var, current_acc)
 
       cond_val = do_eval(comp.loop_condition, loop_env)
 
@@ -430,7 +439,7 @@ defmodule Celixir.Evaluator do
       loop_env =
         env
         |> bind_iter_vars(comp, item)
-        |> Environment.put_variable(comp.acc_var, current_acc)
+        |> Environment.put_local(comp.acc_var, current_acc)
 
       with {:ok, include} <- eval_filter(filter_expr, loop_env),
            {:ok, new_acc} <- apply_transform(include, key, transform_expr, loop_env, current_acc) do
@@ -538,6 +547,17 @@ defmodule Celixir.Evaluator do
   end
 
   defp extract_qualified_name(_), do: nil
+
+  # Check if the base identifier of a select chain is a locally-bound variable
+  defp operand_is_local?(%AST.Ident{name: name}, env) do
+    Environment.local?(env, name)
+  end
+
+  defp operand_is_local?(%AST.Select{operand: operand}, env) do
+    operand_is_local?(operand, env)
+  end
+
+  defp operand_is_local?(_, _env), do: false
 
   # Optional field selection — auto-wrap in Optional when chaining
   # If inner value supports field access (map/struct), missing field -> optional.none()
