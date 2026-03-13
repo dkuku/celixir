@@ -41,7 +41,7 @@ defmodule Celixir.MixProject do
     [
       licenses: ["Apache-2.0"],
       links: %{"GitHub" => @source_url},
-      files: ~w(lib .formatter.exs mix.exs README.md LICENSE)
+      files: ~w(lib .formatter.exs mix.exs README.md LICENSE demo.livemd)
     ]
   end
 

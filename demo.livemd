@@ -1,0 +1,291 @@
+# Celixir Demo
+
+```elixir
+Mix.install([{:celixir, path: "."}])
+```
+
+## Basics
+
+CEL is a non-Turing-complete expression language designed for simplicity and safety.
+Celixir is a pure Elixir implementation.
+
+```elixir
+# Arithmetic
+Celixir.eval!("1 + 2 * 3")
+```
+
+```elixir
+# String operations
+Celixir.eval!("'hello' + ' ' + 'world'")
+```
+
+```elixir
+# Booleans and comparisons
+Celixir.eval!("10 > 5 && 'abc'.startsWith('a')")
+```
+
+```elixir
+# Ternary
+Celixir.eval!("true ? 'yes' : 'no'")
+```
+
+## Variables
+
+Pass data into expressions as variable bindings.
+
+```elixir
+Celixir.eval!("user.age >= 18 && user.country == 'PL'", %{
+  user: %{age: 30, country: "PL"}
+})
+```
+
+```elixir
+Celixir.eval!("price * double(quantity)", %{price: 9.99, quantity: 3})
+```
+
+## Strings
+
+```elixir
+name = "World"
+
+[
+  Celixir.eval!("name.size()", %{name: name}),
+  Celixir.eval!("'hello world'.contains('world')"),
+  Celixir.eval!("'hello world'.upperAscii()"),
+  Celixir.eval!("'a,b,c'.split(',')"),
+  Celixir.eval!("'hello'.reverse()"),
+  Celixir.eval!("'  padded  '.trim()"),
+  Celixir.eval!("'hello'.substring(1, 3)"),
+  Celixir.eval!("'banana'.replace('a', 'o')"),
+  Celixir.eval!(~S|'test@example.com'.matches('[a-z]+@[a-z]+\\.[a-z]+')|)
+]
+```
+
+## Lists and Maps
+
+```elixir
+# List operations
+Celixir.eval!("[3, 1, 2].sort()")
+```
+
+```elixir
+Celixir.eval!("[1, [2, 3], [4]].flatten()")
+```
+
+```elixir
+# Map access and membership
+Celixir.eval!("'key' in m && m.key == 42", %{m: %{"key" => 42}})
+```
+
+```elixir
+# Ranges
+Celixir.eval!("lists.range(0, 5)")
+```
+
+## Comprehensions
+
+Filter, transform, and test collections with macros.
+
+```elixir
+Celixir.eval!("[1, 2, 3, 4, 5].filter(x, x > 2)")
+```
+
+```elixir
+Celixir.eval!("[1, 2, 3].map(x, x * x)")
+```
+
+```elixir
+Celixir.eval!("[1, 2, 3].all(x, x > 0)")
+```
+
+```elixir
+Celixir.eval!("[1, 2, 3].exists(x, x == 2)")
+```
+
+```elixir
+Celixir.eval!("[1, 2, 3, 2].exists_one(x, x == 2)")
+```
+
+## Math
+
+```elixir
+[
+  math_least: Celixir.eval!("math.least(3, 1, 2)"),
+  math_greatest: Celixir.eval!("math.greatest(3, 1, 2)"),
+  ceil: Celixir.eval!("math.ceil(1.2)"),
+  floor: Celixir.eval!("math.floor(1.8)"),
+  round: Celixir.eval!("math.round(1.5)"),
+  abs: Celixir.eval!("math.abs(-42)"),
+  sign: Celixir.eval!("math.sign(-3.14)")
+]
+```
+
+## Type Conversions
+
+```elixir
+[
+  to_int: Celixir.eval!("int('42')"),
+  to_double: Celixir.eval!("double(42)"),
+  to_string: Celixir.eval!("string(3.14)"),
+  to_bool: Celixir.eval!("bool('true')"),
+  to_bytes: Celixir.eval!("bytes('hello')"),
+  typeof: Celixir.eval!("type(42)")
+]
+```
+
+## Timestamps and Durations
+
+```elixir
+Celixir.eval!("timestamp('2024-01-15T10:30:00Z') + duration('1h30m')")
+```
+
+```elixir
+now = Celixir.eval!("timestamp('2026-03-13T12:00:00Z')")
+
+Celixir.eval!(
+  "timestamp('2026-12-25T00:00:00Z') > now",
+  %{now: now}
+)
+```
+
+```elixir
+Celixir.eval!("duration('1h') + duration('30m') == duration('90m')")
+```
+
+## Optional Values
+
+Safely handle missing data without errors.
+
+```elixir
+Celixir.eval!("optional.of('hello').hasValue()")
+```
+
+```elixir
+Celixir.eval!("optional.none().orValue('default')")
+```
+
+```elixir
+# Optional chaining — access fields that might not exist
+Celixir.eval!("{'a': 1}.?b.orValue(0)")
+```
+
+## Compile Once, Evaluate Many
+
+For hot paths, parse once and evaluate with different bindings.
+
+```elixir
+{:ok, program} = Celixir.compile("price * (1.0 - discount)")
+
+for {price, discount} <- [{100.0, 0.1}, {50.0, 0.2}, {200.0, 0.0}] do
+  {:ok, result} = Celixir.Program.eval(program, %{price: price, discount: discount})
+  %{price: price, discount: "#{round(discount * 100)}%", final: result}
+end
+```
+
+## Custom Functions
+
+Extend CEL with Elixir functions.
+
+```elixir
+env =
+  Celixir.Environment.new(%{items: [3, 1, 4, 1, 5, 9, 2, 6]})
+  |> Celixir.Environment.put_function("median", fn list ->
+    sorted = Enum.sort(list)
+    len = length(sorted)
+    mid = div(len, 2)
+
+    if rem(len, 2) == 0 do
+      (Enum.at(sorted, mid - 1) + Enum.at(sorted, mid)) / 2.0
+    else
+      Enum.at(sorted, mid) / 1.0
+    end
+  end)
+
+Celixir.eval!("median(items)", env)
+```
+
+```elixir
+# Namespaced functions
+env =
+  Celixir.Environment.new()
+  |> Celixir.Environment.put_function("str.slugify", fn s ->
+    s |> String.downcase() |> String.replace(~r/[^a-z0-9]+/, "-") |> String.trim("-")
+  end)
+  |> Celixir.Environment.put_function("str.word_count", fn s ->
+    s |> String.split() |> length()
+  end)
+
+[
+  Celixir.eval!(~S|str.slugify("Hello World!")|, env),
+  Celixir.eval!(~S|str.word_count("The quick brown fox")|, env)
+]
+```
+
+## Practical Example: Policy Engine
+
+Use CEL as a rule engine to evaluate access policies.
+
+```elixir
+policies = [
+  {"admin_access", "user.role == 'admin'"},
+  {"own_resource", "user.id == resource.owner_id"},
+  {"public_read", "request.method == 'GET' && resource.visibility == 'public'"},
+  {"business_hours", "request.hour >= 9 && request.hour < 17"},
+  {"rate_limit", "user.request_count < 1000"}
+]
+
+compiled_policies =
+  Enum.map(policies, fn {name, expr} ->
+    {:ok, program} = Celixir.compile(expr)
+    {name, program}
+  end)
+
+context = %{
+  user: %{role: "editor", id: 42, request_count: 150},
+  resource: %{owner_id: 42, visibility: "private"},
+  request: %{method: "PUT", hour: 14}
+}
+
+Enum.map(compiled_policies, fn {name, program} ->
+  {:ok, result} = Celixir.Program.eval(program, context)
+  {name, result}
+end)
+```
+
+## Compile-Time Sigil
+
+Parse expressions at compile time for zero runtime parsing overhead.
+
+```elixir
+import Celixir.Sigil
+
+ast = ~CEL|request.size < 1024 && request.content_type == "application/json"|
+
+Celixir.eval_ast(ast, %{
+  request: %{size: 512, content_type: "application/json"}
+})
+```
+
+## Error Handling
+
+CEL uses error-as-value semantics with short-circuit absorption.
+
+```elixir
+# Errors are returned as {:error, message}
+Celixir.eval("1 / 0")
+```
+
+```elixir
+# Short-circuit: error on left, but right is true → true wins
+Celixir.eval("1/0 > 5 || true")
+```
+
+```elixir
+# Type mismatch
+Celixir.eval("'hello' + 42")
+```
+
+```elixir
+# Undefined variable
+Celixir.eval("missing_var > 0")
+```

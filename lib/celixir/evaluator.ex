@@ -105,22 +105,13 @@ defmodule Celixir.Evaluator do
   defp do_eval(%AST.Select{operand: operand, field: field, test_only: test_only}, env) do
     with :not_type <- try_qualified_type(operand, field),
          :not_local <- if(operand_is_local?(operand, env), do: :local, else: :not_local),
-         :not_var <- try_qualified_variable(operand, field, env) do
+         :not_var <- tag_result(:var, try_qualified_variable(operand, field, env)) do
       # All qualified lookups failed — evaluate operand + field access
-      with_value(do_eval(operand, env), fn target ->
-        if test_only, do: select_test(target, field), else: select_field(target, field)
-      end)
+      eval_field_access(operand, field, test_only, env)
     else
-      {:ok, type_val} ->
-        type_val
-
-      :local ->
-        with_value(do_eval(operand, env), fn target ->
-          if test_only, do: select_test(target, field), else: select_field(target, field)
-        end)
-
-      {:ok, val} ->
-        if test_only, do: val != nil, else: normalize(val)
+      {:ok, type_val} -> type_val
+      :local -> eval_field_access(operand, field, test_only, env)
+      {:var, val} -> if test_only, do: val != nil, else: normalize(val)
     end
   end
 
@@ -302,19 +293,6 @@ defmodule Celixir.Evaluator do
     end
   end
 
-  defp maybe_qualified_call(target, name, args, env, fallback_error) do
-    if match?(%AST.Ident{}, target) or match?(%AST.Select{}, target) do
-      with {:ok, args_list} <- ensure_value(eval_args(args, env)) do
-        case call_function(qualified_name(target, name), args_list, env) do
-          {:cel_error, "undefined function: " <> _} -> fallback_error
-          result -> result
-        end
-      end
-    else
-      fallback_error
-    end
-  end
-
   # cel.block([bindings...], result) — evaluate bindings sequentially, then result
   defp do_eval(%AST.CelBlock{bindings: bindings, result: result}, env) do
     env2 =
@@ -366,6 +344,30 @@ defmodule Celixir.Evaluator do
         result_env = Environment.put_local(env, comp.acc_var, final_acc)
         do_eval(comp.result, result_env)
       end
+    end
+  end
+
+  # --- Helpers extracted from do_eval to keep clause grouping clean ---
+
+  defp tag_result(_tag, :not_var), do: :not_var
+  defp tag_result(tag, {:ok, val}), do: {tag, val}
+
+  defp eval_field_access(operand, field, test_only, env) do
+    with_value(do_eval(operand, env), fn target ->
+      if test_only, do: select_test(target, field), else: select_field(target, field)
+    end)
+  end
+
+  defp maybe_qualified_call(target, name, args, env, fallback_error) do
+    if match?(%AST.Ident{}, target) or match?(%AST.Select{}, target) do
+      with {:ok, args_list} <- ensure_value(eval_args(args, env)) do
+        case call_function(qualified_name(target, name), args_list, env) do
+          {:cel_error, "undefined function: " <> _} -> fallback_error
+          result -> result
+        end
+      end
+    else
+      fallback_error
     end
   end
 
