@@ -103,31 +103,24 @@ defmodule Celixir.Evaluator do
 
   # Field selection
   defp do_eval(%AST.Select{operand: operand, field: field, test_only: test_only}, env) do
-    # First try to resolve as a qualified type name (e.g., google.protobuf.Timestamp)
-    case try_qualified_type(operand, field) do
+    with :not_type <- try_qualified_type(operand, field),
+         :not_local <- if(operand_is_local?(operand, env), do: :local, else: :not_local),
+         :not_var <- try_qualified_variable(operand, field, env) do
+      # All qualified lookups failed — evaluate operand + field access
+      with_value(do_eval(operand, env), fn target ->
+        if test_only, do: select_test(target, field), else: select_field(target, field)
+      end)
+    else
       {:ok, type_val} ->
         type_val
 
-      :not_type ->
-        # If the base of the select chain is a local variable (comprehension iter var,
-        # cel.bind var), field access takes priority over qualified variable lookup.
-        if operand_is_local?(operand, env) do
-          with_value(do_eval(operand, env), fn target ->
-            if test_only, do: select_test(target, field), else: select_field(target, field)
-          end)
-        else
-          # For non-local operands, try qualified variable name first (longest prefix wins),
-          # then fall back to evaluating operand + field access.
-          case try_qualified_variable(operand, field, env) do
-            {:ok, val} ->
-              if test_only, do: val != nil, else: normalize(val)
+      :local ->
+        with_value(do_eval(operand, env), fn target ->
+          if test_only, do: select_test(target, field), else: select_field(target, field)
+        end)
 
-            :not_var ->
-              with_value(do_eval(operand, env), fn target ->
-                if test_only, do: select_test(target, field), else: select_field(target, field)
-              end)
-          end
-        end
+      {:ok, val} ->
+        if test_only, do: val != nil, else: normalize(val)
     end
   end
 
@@ -179,20 +172,15 @@ defmodule Celixir.Evaluator do
           v -> cel_error("no_matching_overload: && on #{cel_typeof(v)}")
         end
 
-      {:cel_error, _} = e ->
-        case do_eval(right, env) do
-          false -> false
-          _ -> e
-        end
+      left_val ->
+        # Left is error or non-bool — right side's `false` absorbs it
+        err =
+          case left_val do
+            {:cel_error, _} -> left_val
+            v -> cel_error("no_matching_overload: && on #{cel_typeof(v)}")
+          end
 
-      v ->
-        # Non-bool left is a type error; check if right side can absorb it
-        e = cel_error("no_matching_overload: && on #{cel_typeof(v)}")
-
-        case do_eval(right, env) do
-          false -> false
-          _ -> e
-        end
+        if do_eval(right, env) == false, do: false, else: err
     end
   end
 
@@ -209,23 +197,15 @@ defmodule Celixir.Evaluator do
           v -> cel_error("no_matching_overload: || on #{cel_typeof(v)}")
         end
 
-      {:cel_error, _} = e ->
-        if do_eval(right, env) == true do
-          true
-        else
-          e
-        end
+      left_val ->
+        # Left is error or non-bool — right side's `true` absorbs it
+        err =
+          case left_val do
+            {:cel_error, _} -> left_val
+            v -> cel_error("no_matching_overload: || on #{cel_typeof(v)}")
+          end
 
-      v ->
-        # Non-bool left is a type error; check if right side can absorb it
-        e = cel_error("no_matching_overload: || on #{cel_typeof(v)}")
-
-        # Must use case, not if — if treats any truthy value (e.g. strings) as true
-        if do_eval(right, env) == true do
-          true
-        else
-          e
-        end
+        if do_eval(right, env) == true, do: true, else: err
     end
   end
 
@@ -312,24 +292,26 @@ defmodule Celixir.Evaluator do
   end
 
   defp do_eval(%AST.Call{function: name, target: target, args: args}, env) do
-    with {:ok, args_list} <- ensure_value(eval_args(args, env)) do
-      case ensure_value(do_eval(target, env)) do
-        {:ok, t} ->
-          call_method(name, t, args_list, env)
+    with {:ok, args_list} <- ensure_value(eval_args(args, env)),
+         {:ok, t} <- ensure_value(do_eval(target, env)) do
+      call_method(name, t, args_list, env)
+    else
+      {:cel_error, _} = e ->
+        # Target failed to resolve — try as qualified function if target is an ident/select chain
+        maybe_qualified_call(target, name, args, env, e)
+    end
+  end
 
-        {:cel_error, _} = e ->
-          # If target is a simple ident that failed to resolve, try as qualified function
-          if match?(%AST.Ident{}, target) or match?(%AST.Select{}, target) do
-            qualified = qualified_name(target, name)
-
-            case call_function(qualified, args_list, env) do
-              {:cel_error, "undefined function: " <> _} -> e
-              result -> result
-            end
-          else
-            e
-          end
+  defp maybe_qualified_call(target, name, args, env, fallback_error) do
+    if match?(%AST.Ident{}, target) or match?(%AST.Select{}, target) do
+      with {:ok, args_list} <- ensure_value(eval_args(args, env)) do
+        case call_function(qualified_name(target, name), args_list, env) do
+          {:cel_error, "undefined function: " <> _} -> fallback_error
+          result -> result
+        end
       end
+    else
+      fallback_error
     end
   end
 
@@ -583,16 +565,10 @@ defmodule Celixir.Evaluator do
   end
 
   defp select_field(target, field) when is_map(target) do
-    result =
-      cond do
-        Map.has_key?(target, field) -> {:found, Map.get(target, field)}
-        is_atom_key?(target, field) -> {:found, Map.get(target, String.to_existing_atom(field))}
-        true -> :not_found
-      end
-
-    case result do
-      {:found, v} -> normalize(v)
-      :not_found -> cel_error("no_such_field: #{field}")
+    cond do
+      Map.has_key?(target, field) -> normalize(Map.get(target, field))
+      is_atom_key?(target, field) -> normalize(Map.get(target, String.to_existing_atom(field)))
+      true -> cel_error("no_such_field: #{field}")
     end
   rescue
     ArgumentError -> cel_error("no_such_field: #{field}")
@@ -670,37 +646,34 @@ defmodule Celixir.Evaluator do
 
   defp select_test({:cel_struct, type_name, fields}, field) do
     provided = Map.get(fields, :__provided_fields__)
+    val = Map.get(fields, field)
 
-    # Unknown field → error (spec requires it)
-    if Map.has_key?(fields, field) || provided == nil do
-      cond do
-        # No schema tracking — fall back to key presence
-        provided == nil ->
-          Map.has_key?(fields, field)
+    cond do
+      # No schema tracking — fall back to key presence
+      provided == nil ->
+        Map.has_key?(fields, field)
 
-        # Field was not explicitly provided
-        not MapSet.member?(provided, field) ->
-          false
+      # Unknown field → error (spec requires it)
+      not Map.has_key?(fields, field) ->
+        cel_error("no_such_field: #{field}")
 
-        # Repeated/map fields: has() returns false when empty, even if explicitly provided.
-        # This applies to both proto2 and proto3.
-        true ->
-          val = Map.get(fields, field)
+      # Field was not explicitly provided
+      not MapSet.member?(provided, field) ->
+        false
 
-          cond do
-            is_list(val) -> val != []
-            is_map(val) -> val != %{}
-            # Proto3 non-oneof scalar: has() returns false for default values.
-            # We can only apply this when the type name indicates proto3.
-            proto3_type?(type_name) and not proto3_oneof_field?(type_name, field) ->
-              not proto3_default_value?(val)
+      # Repeated/map fields: has() returns false when empty (both proto2 and proto3)
+      is_list(val) ->
+        val != []
 
-            true ->
-              true
-          end
-      end
-    else
-      cel_error("no_such_field: #{field}")
+      is_map(val) ->
+        val != %{}
+
+      # Proto3 non-oneof scalar: has() returns false for default values
+      proto3_type?(type_name) and not proto3_oneof_field?(type_name, field) ->
+        not proto3_default_value?(val)
+
+      true ->
+        true
     end
   end
 
@@ -723,8 +696,7 @@ defmodule Celixir.Evaluator do
   defp proto3_type?(_), do: false
 
   # Qualify a short type name with the container prefix if the proto schema recognizes it
-  defp qualify_type_name(type_name, %{container: container})
-       when is_binary(container) and container != "" do
+  defp qualify_type_name(type_name, %{container: container}) when is_binary(container) and container != "" do
     qualified = container <> "." <> type_name
 
     if Proto.get_schema(qualified) do
@@ -738,9 +710,9 @@ defmodule Celixir.Evaluator do
 
   # Proto3 oneof fields always have presence — known oneof fields for TestAllTypes
   @proto3_oneof_fields MapSet.new([
-    "single_nested_message",
-    "single_nested_enum"
-  ])
+                         "single_nested_message",
+                         "single_nested_enum"
+                       ])
 
   defp proto3_oneof_field?(_type_name, field) do
     MapSet.member?(@proto3_oneof_fields, field)
@@ -825,7 +797,6 @@ defmodule Celixir.Evaluator do
         normalize(Map.get(target, unwrapped))
 
       true ->
-        # Fall back to cel_equal? key matching (handles int/uint cross-type lookup)
         case map_find_key(target, idx) do
           {:ok, matched_key} -> normalize(Map.get(target, matched_key))
           :error -> cel_error("key #{inspect(unwrapped)} not found in map")

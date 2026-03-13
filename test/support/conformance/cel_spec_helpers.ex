@@ -3,6 +3,9 @@ defmodule Celixir.CelSpecHelpers do
 
   import ExUnit.Assertions
 
+  alias Celixir.Types.Duration
+  alias Celixir.Types.Timestamp
+
   # Tests we know we can't pass yet (proto-specific, unsupported features)
   @skip_tests MapSet.new([
                 # Proto field access — evaluator needs Duration/Timestamp default values for message fields
@@ -115,13 +118,13 @@ defmodule Celixir.CelSpecHelpers do
 
   def convert_value({:duration, seconds, nanos}) do
     micros = seconds * 1_000_000 + div(nanos, 1000)
-    Celixir.Types.Duration.new(micros)
+    Duration.new(micros)
   end
 
   def convert_value({:timestamp, seconds, nanos}) do
     micros = seconds * 1_000_000 + div(nanos, 1000)
     {:ok, dt} = DateTime.from_unix(micros, :microsecond)
-    Celixir.Types.Timestamp.new(dt)
+    Timestamp.new(dt)
   end
 
   def convert_value({:list, items}), do: Enum.map(items, &convert_value/1)
@@ -356,18 +359,18 @@ defmodule Celixir.CelSpecHelpers do
   defp proto_value_matches?(%{} = e, _actual) when map_size(e) == 0, do: true
 
   # Duration: match %{"seconds" => s, "nanos" => n} against Duration struct
-  defp proto_value_matches?(%{"seconds" => _} = expected, %Celixir.Types.Duration{} = dur) do
+  defp proto_value_matches?(%{"seconds" => _} = expected, %Duration{} = dur) do
     expected_seconds = Map.get(expected, "seconds", 0)
     expected_nanos = Map.get(expected, "nanos", 0)
-    total_nanos = Celixir.Types.Duration.to_total_nanos(dur)
+    total_nanos = Duration.to_total_nanos(dur)
     total_nanos == expected_seconds * 1_000_000_000 + expected_nanos
   end
 
   # Timestamp: match %{"seconds" => s, "nanos" => n} against Timestamp struct
-  defp proto_value_matches?(%{"seconds" => _} = expected, %Celixir.Types.Timestamp{} = ts) do
+  defp proto_value_matches?(%{"seconds" => _} = expected, %Timestamp{} = ts) do
     expected_seconds = Map.get(expected, "seconds", 0)
     expected_nanos = Map.get(expected, "nanos", 0)
-    {actual_seconds, actual_nanos} = Celixir.Types.Timestamp.to_proto(ts)
+    {actual_seconds, actual_nanos} = Timestamp.to_proto(ts)
     actual_seconds == expected_seconds and actual_nanos == expected_nanos
   end
 
@@ -387,7 +390,6 @@ defmodule Celixir.CelSpecHelpers do
   defp proto_value_matches?(%{"string_value" => expected}, actual), do: actual == expected
   defp proto_value_matches?(%{"bool_value" => expected}, actual), do: actual == expected
   defp proto_value_matches?(%{"null_value" => _}, actual), do: actual == nil
-
 
   defp proto_value_matches?(%{"values" => expected_vals}, actual) when is_list(actual) do
     length(expected_vals) == length(actual) and

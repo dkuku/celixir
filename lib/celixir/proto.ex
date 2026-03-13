@@ -334,38 +334,21 @@ defmodule Celixir.Proto do
 
   # Resolve a possibly-short type name using the package prefix from a parent type
   defp resolve_type_with_package(type_name, parent_type) do
-    if String.contains?(type_name, ".") do
-      # Already fully qualified
-      type_name
+    with false <- String.contains?(type_name, "."),
+         package when package != nil <- extract_package(parent_type) do
+      "#{package}.#{type_name}"
     else
-      # Extract package from parent_type and prepend
-      package = extract_package(parent_type)
-
-      if package == nil do
-        type_name
-      else
-        "#{package}.#{type_name}"
-      end
+      _ -> type_name
     end
   end
 
   defp extract_package(type_name) do
-    # If the parent type is also short, try to resolve it via Codec
     if String.contains?(type_name, ".") do
       type_name |> String.split(".") |> Enum.drop(-1) |> Enum.join(".")
     else
-      # Try to find FQ name from the Codec module resolution
-      case Codec.resolve_module(type_name) do
-        nil ->
-          nil
-
-        mod ->
-          mod
-          |> Codec.module_full_name()
-          |> case do
-            nil -> nil
-            fq -> fq |> String.split(".") |> Enum.drop(-1) |> Enum.join(".")
-          end
+      with mod when mod != nil <- Codec.resolve_module(type_name),
+           fq when fq != nil <- Codec.module_full_name(mod) do
+        fq |> String.split(".") |> Enum.drop(-1) |> Enum.join(".")
       end
     end
   end
