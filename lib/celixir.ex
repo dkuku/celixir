@@ -304,4 +304,52 @@ defmodule Celixir do
   end
 
   def unwrap(v), do: v
+
+  @doc """
+  Encodes a plain Elixir value into CEL internal representation.
+
+  This is the inverse of `unwrap/1`. Since unwrapping loses some type
+  information (e.g., both `cel_int` and `cel_uint` unwrap to plain integers),
+  `encode` uses sensible defaults: integers become `{:cel_int, v}`.
+
+  ## Examples
+
+      iex> Celixir.encode(42)
+      {:cel_int, 42}
+
+      iex> Celixir.encode("hello")
+      "hello"
+
+      iex> Celixir.encode([1, 2, 3])
+      [{:cel_int, 1}, {:cel_int, 2}, {:cel_int, 3}]
+
+      iex> Celixir.encode(:optional_none)
+      %Celixir.Types.Optional{has_value: false}
+  """
+  def encode(v) when is_integer(v), do: {:cel_int, v}
+  def encode({:optional, v}), do: %Optional{has_value: true, value: encode(v)}
+  def encode(:optional_none), do: %Optional{has_value: false}
+  def encode(list) when is_list(list), do: Enum.map(list, &encode/1)
+
+  def encode(map) when is_map(map) and not is_struct(map) do
+    Map.new(map, fn {k, v} -> {encode(k), encode(v)} end)
+  end
+
+  def encode(v), do: v
+
+  @doc """
+  Encodes an integer as a CEL unsigned integer.
+
+      iex> Celixir.encode_uint(42)
+      {:cel_uint, 42}
+  """
+  def encode_uint(v) when is_integer(v) and v >= 0, do: {:cel_uint, v}
+
+  @doc """
+  Encodes a binary as CEL bytes.
+
+      iex> Celixir.encode_bytes(<<1, 2, 3>>)
+      {:cel_bytes, <<1, 2, 3>>}
+  """
+  def encode_bytes(v) when is_binary(v), do: {:cel_bytes, v}
 end
