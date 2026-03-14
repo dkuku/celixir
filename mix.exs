@@ -33,7 +33,8 @@ defmodule Celixir.MixProject do
       {:protobuf, "~> 0.16", optional: true},
       {:tz, "~> 0.28"},
       {:styler, "~> 1.0", only: [:dev, :test], runtime: false},
-      {:ex_doc, "~> 0.40", only: :dev, runtime: false}
+      {:ex_doc, "~> 0.40", only: :dev, runtime: false},
+      {:makeup_cel, "~> 0.1.0", only: :dev, runtime: false}
     ]
   end
 
@@ -48,7 +49,10 @@ defmodule Celixir.MixProject do
   defp docs do
     [
       main: "Celixir",
-      extras: ["README.md", "CHANGELOG.md"],
+      extras: ["README.md", "guides/tutorial.md", "CHANGELOG.md"],
+      groups_for_extras: [
+        Guides: ["guides/tutorial.md"]
+      ],
       source_ref: "v#{@version}"
     ]
   end
