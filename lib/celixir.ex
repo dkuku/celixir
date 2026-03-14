@@ -198,6 +198,33 @@ defmodule Celixir do
   end
 
   @doc """
+  Loads a CEL expression from a file and compiles it into a `Celixir.Program`.
+
+  ## Examples
+
+      {:ok, program} = Celixir.load_file("path/to/rule.cel")
+      Celixir.Program.eval(program, %{x: 42})
+  """
+  @spec load_file(String.t()) :: {:ok, Celixir.Program.t()} | {:error, String.t()}
+  def load_file(path) do
+    case File.read(path) do
+      {:ok, contents} -> compile(String.trim(contents))
+      {:error, reason} -> {:error, "failed to read #{path}: #{:file.format_error(reason)}"}
+    end
+  end
+
+  @doc """
+  Like `load_file/1` but raises on error.
+  """
+  @spec load_file!(String.t()) :: Celixir.Program.t()
+  def load_file!(path) do
+    case load_file(path) do
+      {:ok, program} -> program
+      {:error, msg} -> raise Celixir.Error, message: msg
+    end
+  end
+
+  @doc """
   Compiles a CEL expression and returns a callable function.
 
   The returned function takes a bindings map (or `Celixir.Environment`) and
