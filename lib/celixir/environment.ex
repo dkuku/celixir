@@ -47,13 +47,14 @@ defmodule Celixir.Environment do
       Celixir.eval!("format.currency(price, 'USD')", env)
   """
 
-  defstruct variables: %{}, functions: %{}, type_adapter: nil, container: nil, locals: %{}
+  defstruct variables: %{}, functions: %{}, type_adapter: nil, container: nil, container_prefixes: [], locals: %{}
 
   @type t :: %__MODULE__{
           variables: %{String.t() => any()},
           functions: %{String.t() => function()},
           type_adapter: module() | nil,
           container: String.t() | nil,
+          container_prefixes: [String.t()],
           locals: %{String.t() => any()}
         }
 
@@ -77,7 +78,7 @@ defmodule Celixir.Environment do
 
   @doc "Sets the container (namespace) for identifier resolution."
   def set_container(%__MODULE__{} = env, container) do
-    %{env | container: container}
+    %{env | container: container, container_prefixes: compute_container_prefixes(container)}
   end
 
   @doc """
@@ -106,11 +107,9 @@ defmodule Celixir.Environment do
     Map.fetch(env.variables, name)
   end
 
-  defp resolve_with_container(%{container: container} = env, name) do
+  defp resolve_with_container(env, name) do
     # Try progressively shorter container prefixes: com.example.y, com.y, y
-    prefixes = container_prefixes(container)
-
-    Enum.find_value(prefixes, fn prefix ->
+    Enum.find_value(env.container_prefixes, fn prefix ->
       qualified = prefix <> "." <> name
 
       case Map.fetch(env.variables, qualified) do
@@ -120,7 +119,9 @@ defmodule Celixir.Environment do
     end) || Map.fetch(env.variables, name)
   end
 
-  defp container_prefixes(container) do
+  defp compute_container_prefixes(nil), do: []
+
+  defp compute_container_prefixes(container) do
     parts = String.split(container, ".")
     # ["com.example", "com"] for container "com.example"
     Enum.map(length(parts)..1//-1, fn n ->

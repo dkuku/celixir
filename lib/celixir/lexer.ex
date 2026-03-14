@@ -444,7 +444,10 @@ defmodule Celixir.Lexer do
 
   defp read_raw_triple_string(input, quote, line, acc) do
     triple = String.duplicate(quote, 3)
+    read_raw_triple_string_loop(input, triple, line, acc)
+  end
 
+  defp read_raw_triple_string_loop(input, triple, line, acc) do
     case input do
       <<>> ->
         {:error, "line #{line}: unterminated raw triple-quoted string"}
@@ -453,10 +456,10 @@ defmodule Celixir.Lexer do
         {:ok, acc |> Enum.reverse() |> IO.iodata_to_binary(), rest, line}
 
       <<?\n, rest::binary>> ->
-        read_raw_triple_string(rest, quote, line + 1, ["\n" | acc])
+        read_raw_triple_string_loop(rest, triple, line + 1, ["\n" | acc])
 
       <<c::utf8, rest::binary>> ->
-        read_raw_triple_string(rest, quote, line, [<<c::utf8>> | acc])
+        read_raw_triple_string_loop(rest, triple, line, [<<c::utf8>> | acc])
     end
   end
 
@@ -464,7 +467,10 @@ defmodule Celixir.Lexer do
 
   defp read_triple_string(input, quote, line, acc, mode) do
     triple = String.duplicate(quote, 3)
+    read_triple_string_loop(input, triple, line, acc, mode)
+  end
 
+  defp read_triple_string_loop(input, triple, line, acc, mode) do
     case input do
       <<>> ->
         {:error, "line #{line}: unterminated triple-quoted string"}
@@ -473,16 +479,16 @@ defmodule Celixir.Lexer do
         {:ok, acc |> Enum.reverse() |> IO.iodata_to_binary(), rest, line}
 
       <<?\n, rest::binary>> ->
-        read_triple_string(rest, quote, line + 1, ["\n" | acc], mode)
+        read_triple_string_loop(rest, triple, line + 1, ["\n" | acc], mode)
 
       <<"\\", rest::binary>> ->
         case read_escape(rest, line, mode) do
-          {:ok, char, rest2} -> read_triple_string(rest2, quote, line, [char | acc], mode)
+          {:ok, char, rest2} -> read_triple_string_loop(rest2, triple, line, [char | acc], mode)
           {:error, _} = err -> err
         end
 
       <<c::utf8, rest::binary>> ->
-        read_triple_string(rest, quote, line, [<<c::utf8>> | acc], mode)
+        read_triple_string_loop(rest, triple, line, [<<c::utf8>> | acc], mode)
     end
   end
 

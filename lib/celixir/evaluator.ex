@@ -402,20 +402,12 @@ defmodule Celixir.Evaluator do
 
       cond_val = do_eval(comp.loop_condition, loop_env)
 
-      cond do
-        # Error in loop_condition: continue to allow error absorption
-        is_error(cond_val) ->
-          step_val = do_eval(comp.loop_step, loop_env)
-          {:cont, step_val}
-
-        # Condition true: evaluate step
-        cond_val ->
-          step_val = do_eval(comp.loop_step, loop_env)
-          {:cont, step_val}
-
-        # Condition false: early exit (all found false, or exists found true)
-        true ->
-          {:halt, current_acc}
+      # Condition false: early exit (all found false, or exists found true)
+      # Error or true: continue to allow error absorption
+      if cond_val == false do
+        {:halt, current_acc}
+      else
+        {:cont, do_eval(comp.loop_step, loop_env)}
       end
     end)
   end
@@ -633,8 +625,11 @@ defmodule Celixir.Evaluator do
         _ -> -1
       end
 
-    if i >= 0 and i < length(target) do
-      Optional.of(Enum.at(target, i))
+    if i >= 0 do
+      case Enum.fetch(target, i) do
+        {:ok, val} -> Optional.of(val)
+        :error -> Optional.none()
+      end
     else
       Optional.none()
     end
@@ -767,9 +762,14 @@ defmodule Celixir.Evaluator do
   defp do_index(%Optional{has_value: false}, _idx), do: Optional.none()
 
   defp do_index(target, {:cel_int, idx}) when is_list(target) do
-    if idx >= 0 and idx < length(target),
-      do: normalize(Enum.at(target, idx)),
-      else: cel_error("index #{idx} out of range")
+    if idx >= 0 do
+      case Enum.fetch(target, idx) do
+        {:ok, val} -> normalize(val)
+        :error -> cel_error("index #{idx} out of range")
+      end
+    else
+      cel_error("index #{idx} out of range")
+    end
   end
 
   defp do_index(target, idx) when is_list(target) and is_integer(idx), do: do_index(target, {:cel_int, idx})
@@ -1203,11 +1203,17 @@ defmodule Celixir.Evaluator do
       end)
   end
 
-  # Find a key in the map that is cel_equal? to target_key
+  # Find a key in the map that is cel_equal? to target_key.
+  # Fast path: try direct key match first (O(log n)), then fall back to
+  # linear scan for cross-type numeric equality (e.g., int key vs uint lookup).
   defp map_find_key(map, target_key) do
-    Enum.find_value(Map.keys(map), :error, fn k ->
-      if cel_equal?(k, target_key), do: {:ok, k}
-    end)
+    if Map.has_key?(map, target_key) do
+      {:ok, target_key}
+    else
+      Enum.find_value(Map.keys(map), :error, fn k ->
+        if cel_equal?(k, target_key), do: {:ok, k}
+      end)
+    end
   end
 
   # --- Ordering ---
@@ -1891,7 +1897,7 @@ defmodule Celixir.Evaluator do
       {:cel_int, 0}
     else
       case :binary.match(target, substr) do
-        {pos, _len} -> {:cel_int, pos}
+        {byte_pos, _len} -> {:cel_int, byte_offset_to_code_point(target, byte_pos)}
         :nomatch -> {:cel_int, -1}
       end
     end
@@ -1911,7 +1917,7 @@ defmodule Celixir.Evaluator do
         sliced = String.slice(target, offset, len)
 
         case :binary.match(sliced, substr) do
-          {pos, _len} -> {:cel_int, pos + offset}
+          {byte_pos, _len} -> {:cel_int, byte_offset_to_code_point(sliced, byte_pos) + offset}
           :nomatch -> {:cel_int, -1}
         end
     end
@@ -1923,7 +1929,7 @@ defmodule Celixir.Evaluator do
     else
       case find_last(target, substr) do
         nil -> {:cel_int, -1}
-        pos -> {:cel_int, pos}
+        byte_pos -> {:cel_int, byte_offset_to_code_point(target, byte_pos)}
       end
     end
   end
@@ -1945,9 +1951,12 @@ defmodule Celixir.Evaluator do
         sliced = String.slice(target, 0, offset + String.length(substr))
 
         case find_last(sliced, substr) do
-          nil -> {:cel_int, -1}
-          pos when pos <= offset -> {:cel_int, pos}
-          _pos -> {:cel_int, -1}
+          nil ->
+            {:cel_int, -1}
+
+          byte_pos ->
+            cp_pos = byte_offset_to_code_point(sliced, byte_pos)
+            if cp_pos <= offset, do: {:cel_int, cp_pos}, else: {:cel_int, -1}
         end
     end
   end
@@ -2231,6 +2240,11 @@ defmodule Celixir.Evaluator do
     end
   end
 
+  # Convert a byte offset in a UTF-8 binary to a code point (character) index.
+  defp byte_offset_to_code_point(binary, byte_offset) do
+    binary |> binary_part(0, byte_offset) |> String.length()
+  end
+
   # CEL strings.quote: wraps string in double quotes with Go-style escaping
   defp cel_quote_string(s) do
     escaped =
@@ -2372,9 +2386,9 @@ defmodule Celixir.Evaluator do
   defp do_parse_fmt_prec(rest), do: {nil, rest}
 
   defp do_consume_fmt_digits(<<c, rest::binary>>, acc) when c >= ?0 and c <= ?9,
-    do: do_consume_fmt_digits(rest, acc ++ [c])
+    do: do_consume_fmt_digits(rest, [c | acc])
 
-  defp do_consume_fmt_digits(rest, acc), do: {acc, rest}
+  defp do_consume_fmt_digits(rest, acc), do: {Enum.reverse(acc), rest}
 
   defp do_fmt_arg(:s, _p, val), do: do_fmt_str(val)
 
@@ -2511,27 +2525,41 @@ defmodule Celixir.Evaluator do
   end
 
   defp do_fmt_list(list) do
-    Enum.reduce_while(list, [], fn elem, acc ->
-      case do_fmt_str(elem) do
-        {:cel_error, _} = err -> {:halt, err}
-        s -> {:cont, acc ++ [s]}
-      end
-    end)
+    case do_fmt_list(list, []) do
+      {:cel_error, _} = err -> err
+      acc -> Enum.reverse(acc)
+    end
+  end
+
+  defp do_fmt_list([], acc), do: acc
+
+  defp do_fmt_list([elem | rest], acc) do
+    case do_fmt_str(elem) do
+      {:cel_error, _} = err -> err
+      s -> do_fmt_list(rest, [s | acc])
+    end
   end
 
   defp do_fmt_map(map) do
     sorted = map |> Map.to_list() |> Enum.sort_by(fn {k, _} -> do_fmt_key_sort(k) end)
 
-    Enum.reduce_while(sorted, [], fn {k, v}, acc ->
-      ks = do_fmt_str(k)
-      vs = do_fmt_str(v)
+    case do_fmt_map_entries(sorted, []) do
+      {:cel_error, _} = err -> err
+      acc -> Enum.reverse(acc)
+    end
+  end
 
-      cond do
-        match?({:cel_error, _}, ks) -> {:halt, ks}
-        match?({:cel_error, _}, vs) -> {:halt, vs}
-        true -> {:cont, acc ++ [ks <> ": " <> vs]}
-      end
-    end)
+  defp do_fmt_map_entries([], acc), do: acc
+
+  defp do_fmt_map_entries([{k, v} | rest], acc) do
+    ks = do_fmt_str(k)
+    vs = do_fmt_str(v)
+
+    cond do
+      match?({:cel_error, _}, ks) -> ks
+      match?({:cel_error, _}, vs) -> vs
+      true -> do_fmt_map_entries(rest, [ks <> ": " <> vs | acc])
+    end
   end
 
   defp do_fmt_key_sort({:cel_int, v}), do: {0, v, ""}
