@@ -47,7 +47,7 @@ defmodule Celixir.Environment do
       Celixir.eval!("format.currency(price, 'USD')", env)
   """
 
-  defstruct variables: %{}, functions: %{}, type_adapter: nil, container: nil, container_prefixes: [], locals: %{}
+  defstruct variables: %{}, functions: %{}, type_adapter: nil, container: nil, container_prefixes: [], locals: %{}, private: %{}
 
   @type t :: %__MODULE__{
           variables: %{String.t() => any()},
@@ -55,7 +55,8 @@ defmodule Celixir.Environment do
           type_adapter: module() | nil,
           container: String.t() | nil,
           container_prefixes: [String.t()],
-          locals: %{String.t() => any()}
+          locals: %{String.t() => any()},
+          private: %{any() => any()}
         }
 
   @doc "Creates a new empty environment."
@@ -137,6 +138,47 @@ defmodule Celixir.Environment do
   @doc "Looks up a function."
   def get_function(%__MODULE__{} = env, name) do
     Map.fetch(env.functions, name)
+  end
+
+  @doc """
+  Stores a private value in the environment.
+
+  Private values are not visible to CEL expressions — they are only
+  accessible from custom Elixir functions that receive the environment.
+
+  ## Examples
+
+      env = Celixir.Environment.new()
+            |> Celixir.Environment.put_private(:repo, MyApp.Repo)
+  """
+  def put_private(%__MODULE__{} = env, key, value) do
+    %{env | private: Map.put(env.private, key, value)}
+  end
+
+  @doc """
+  Retrieves a private value from the environment.
+
+  Returns `{:ok, value}` or `:error`.
+  """
+  def get_private(%__MODULE__{} = env, key) do
+    Map.fetch(env.private, key)
+  end
+
+  @doc """
+  Retrieves a private value, raising if the key doesn't exist.
+  """
+  def get_private!(%__MODULE__{} = env, key) do
+    case get_private(env, key) do
+      {:ok, value} -> value
+      :error -> raise KeyError, key: key, term: :private
+    end
+  end
+
+  @doc """
+  Deletes a private value from the environment.
+  """
+  def delete_private(%__MODULE__{} = env, key) do
+    %{env | private: Map.delete(env.private, key)}
   end
 
   @doc "Sets a custom type adapter module."
