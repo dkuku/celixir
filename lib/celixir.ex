@@ -54,6 +54,10 @@ defmodule Celixir do
       `optional.ofNonZeroValue()`, `.hasValue()`, `.value()`, `.orValue()`, `.or()`
     * **Encoding**: `base64.encode()`, `base64.decode()`
     * **Custom functions**: register your own via `Celixir.Environment.put_function/3`
+      or declaratively with `Celixir.API` and `defcel`
+    * **Reusable functions**: `to_fun/1` compiles to a plain anonymous function
+    * **File loading**: `load_file/1` loads expressions from files
+    * **Value encoding**: `encode/1` converts Elixir values to CEL internal types
     * **Protobuf integration**: field access, has() checks, well-known type
       conversion via `Celixir.ProtobufAdapter`
     * **Static type checking**: optional pre-evaluation validation via

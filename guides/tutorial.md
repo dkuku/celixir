@@ -301,6 +301,70 @@ Celixir.eval!(~S|str.slugify("Hello World!")|, env)
 # => "hello-world"
 ```
 
+### Function Libraries with `defcel`
+
+For larger projects, define function libraries declaratively with `Celixir.API`:
+
+```elixir
+defmodule MyApp.CelMath do
+  use Celixir.API, scope: "mymath"
+
+  defcel abs(x) do
+    Kernel.abs(x)
+  end
+
+  defcel clamp(val, lo, hi) do
+    val |> max(lo) |> min(hi)
+  end
+end
+
+env = Celixir.Environment.new() |> MyApp.CelMath.register()
+Celixir.eval!("mymath.clamp(150, 0, 100)", env)
+# => 100
+```
+
+Omit the `:scope` option to register functions without a namespace prefix:
+
+```elixir
+defmodule MyApp.Helpers do
+  use Celixir.API
+
+  defcel greet(name) do
+    "Hello, #{name}!"
+  end
+end
+```
+
+## Reusable Functions
+
+Compile a CEL expression into a plain anonymous function:
+
+```elixir
+validator = Celixir.to_fun!("age >= 18 && status == 'active'")
+
+validator.(%{age: 25, status: "active"})   # => {:ok, true}
+validator.(%{age: 15, status: "active"})   # => {:ok, false}
+```
+
+This is useful when you want to pass CEL logic into higher-order functions
+like `Enum.filter/2` or store it in a map of named rules.
+
+## Loading Expressions from Files
+
+Store CEL expressions in external files for config-driven workflows:
+
+```elixir
+# rules/access_policy.cel contains:
+#   user.role == 'admin' || resource.public
+
+{:ok, program} = Celixir.load_file("rules/access_policy.cel")
+Celixir.Program.eval(program, %{user: %{role: "viewer"}, resource: %{public: true}})
+# => {:ok, true}
+
+# Bang variant raises on error
+program = Celixir.load_file!("rules/access_policy.cel")
+```
+
 ## Compile-Time Sigil
 
 Parse expressions at compile time for zero runtime parsing cost:

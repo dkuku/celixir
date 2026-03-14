@@ -51,6 +51,37 @@ Celixir.Program.eval(program, %{
 # => {:ok, true}
 ```
 
+## Create Reusable Functions
+
+Compile a CEL expression into a plain anonymous function you can pass around:
+
+```elixir
+validator = Celixir.to_fun!("age >= 18 && status == 'active'")
+
+validator.(%{age: 25, status: "active"})   # => {:ok, true}
+validator.(%{age: 15, status: "active"})   # => {:ok, false}
+
+# Use in pipelines, pass to other modules, store in config
+rules = %{
+  can_edit:   Celixir.to_fun!("user.role in ['admin', 'editor']"),
+  is_active:  Celixir.to_fun!("user.status == 'active'")
+}
+
+rules.can_edit.(%{user: %{role: "admin"}})  # => {:ok, true}
+```
+
+## Load Expressions from Files
+
+Store CEL expressions in files for config-driven rule engines:
+
+```elixir
+# rules/access_policy.cel contains: user.role == 'admin' || resource.public
+{:ok, program} = Celixir.load_file("rules/access_policy.cel")
+
+Celixir.Program.eval(program, %{user: %{role: "viewer"}, resource: %{public: true}})
+# => {:ok, true}
+```
+
 ## Custom Functions
 
 Extend CEL with your own functions written in Elixir. Custom functions receive
@@ -114,42 +145,54 @@ Celixir.eval!(~S|str.repeat("ab", 3)|, env)
 # => "ababab"
 ```
 
-### Building a function library
+### Building a function library with `defcel`
 
-Group related functions into a module that configures an environment:
+Use `Celixir.API` to define function libraries declaratively:
 
 ```elixir
-defmodule MyApp.CelLibrary do
-  alias Celixir.Environment
+defmodule MyApp.CelMath do
+  use Celixir.API, scope: "mymath"
 
-  def register(env \\ Environment.new()) do
-    env
-    |> Environment.put_function("slugify", &slugify/1)
-    |> Environment.put_function("format.currency", &format_currency/2)
-    |> Environment.put_function("format.percent", &format_percent/1)
+  defcel abs(x) do
+    Kernel.abs(x)
   end
 
-  defp slugify(s) do
-    s |> String.downcase() |> String.replace(~r/[^a-z0-9]+/, "-") |> String.trim("-")
-  end
-
-  defp format_currency(amount, currency) do
-    "#{currency} #{:erlang.float_to_binary(amount / 1.0, decimals: 2)}"
-  end
-
-  defp format_percent(ratio) do
-    "#{round(ratio * 100)}%"
+  defcel clamp(val, lo, hi) do
+    val |> max(lo) |> min(hi)
   end
 end
 
-env = MyApp.CelLibrary.register()
-      |> Celixir.Environment.put_variable("title", "Hello World!")
+env = Celixir.Environment.new() |> MyApp.CelMath.register()
 
-Celixir.eval!(~S|slugify(title)|, env)
-# => "hello-world"
+Celixir.eval!("mymath.abs(-42)", env)
+# => 42
 
-Celixir.eval!(~S|format.currency(29.9, "USD")|, env)
-# => "USD 29.90"
+Celixir.eval!("mymath.clamp(150, 0, 100)", env)
+# => 100
+```
+
+Multiple API modules can be composed on the same environment:
+
+```elixir
+env =
+  Celixir.Environment.new(%{price: 100})
+  |> MyApp.CelMath.register()
+  |> MyApp.CelFormatting.register()
+```
+
+### Private environment data
+
+Store opaque data on the environment for use in custom functions, without
+exposing it as a CEL variable:
+
+```elixir
+env =
+  Celixir.Environment.new()
+  |> Celixir.Environment.put_private(:api_key, "secret-123")
+  |> Celixir.Environment.put_function("fetch", fn url ->
+    # api_key is accessible from Elixir but not from CEL expressions
+    # ...
+  end)
 ```
 
 ### Using with `Celixir.Program` (compile once, evaluate many)
