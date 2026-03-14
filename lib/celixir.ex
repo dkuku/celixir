@@ -24,6 +24,13 @@ defmodule Celixir do
       Celixir.Program.eval(program, %{x: 5, y: 1})   # => {:ok, 11}
       Celixir.Program.eval(program, %{x: 10, y: 3})   # => {:ok, 23}
 
+  ## Create Reusable Functions
+
+      validator = Celixir.to_fun!("age >= 18 && status == 'active'")
+
+      validator.(%{age: 25, status: "active"})   # => {:ok, true}
+      validator.(%{age: 15, status: "active"})   # => {:ok, false}
+
   ## Supported Features
 
     * **Types**: int, uint, double, bool, string, bytes, list, map, null,
@@ -187,6 +194,58 @@ defmodule Celixir do
   def compile(expression) do
     with {:ok, ast} <- parse(expression) do
       {:ok, Celixir.Program.new(ast, expression)}
+    end
+  end
+
+  @doc """
+  Compiles a CEL expression and returns a callable function.
+
+  The returned function takes a bindings map (or `Celixir.Environment`) and
+  returns `{:ok, result}` or `{:error, message}`.
+
+  ## Examples
+
+      iex> fun = Celixir.to_fun!("x * 2 + y")
+      iex> fun.(%{x: 5, y: 1})
+      {:ok, 11}
+
+      iex> fun = Celixir.to_fun!("name.startsWith('hello')")
+      iex> fun.(%{name: "hello world"})
+      {:ok, true}
+  """
+  @spec to_fun(String.t()) :: {:ok, (map() -> {:ok, any()} | {:error, String.t()})} | {:error, String.t()}
+  def to_fun(expression) do
+    with {:ok, ast} <- parse(expression) do
+      fun = fn bindings ->
+        env =
+          case bindings do
+            %Environment{} = e -> e
+            map when is_map(map) -> Environment.new(map)
+          end
+
+        with {:ok, result} <- Evaluator.eval(ast, env) do
+          {:ok, unwrap(result)}
+        end
+      end
+
+      {:ok, fun}
+    end
+  end
+
+  @doc """
+  Like `to_fun/1` but raises on parse error.
+
+  ## Examples
+
+      iex> fun = Celixir.to_fun!("x + 1")
+      iex> fun.(%{x: 10})
+      {:ok, 11}
+  """
+  @spec to_fun!(String.t()) :: (map() -> {:ok, any()} | {:error, String.t()})
+  def to_fun!(expression) do
+    case to_fun(expression) do
+      {:ok, fun} -> fun
+      {:error, msg} -> raise Celixir.Error, message: "CEL compilation error: #{msg}"
     end
   end
 
