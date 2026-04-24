@@ -1,0 +1,5 @@
+items
+  .filter(item, item.active && item.score >= threshold)
+  .map(item, item.name.trim().lowerAscii())
+  .distinct()
+  .sortBy(name, name)

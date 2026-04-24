@@ -475,7 +475,7 @@ defmodule Celixir.Parser do
     {:ok, %AST.Call{function: name, target: nil, args: args}, rest}
   end
 
-  @comprehension_macros ~w(all exists exists_one existsOne filter map transformList transformMap)
+  @comprehension_macros ~w(all exists exists_one existsOne filter map transformList transformMap sortBy transformMapEntry)
 
   # One-variable forms:
   #   list.all(x, pred) -> comprehension that checks all elements satisfy pred
@@ -767,6 +767,63 @@ defmodule Celixir.Parser do
        loop_step: transform,
        result: %AST.Ident{name: "__result__"},
        kind: {:transform_map, transform, nil}
+     }}
+  end
+
+  # transformMapEntry(var1, var2, filter, transform) — with filter (4 args)
+  defp expand_comprehension("transformMapEntry", iter_range, [
+         %AST.Ident{name: var1},
+         %AST.Ident{name: var2},
+         filter_expr,
+         transform
+       ]) do
+    {:ok,
+     %AST.Comprehension{
+       iter_var: var1,
+       iter_var2: var2,
+       iter_range: iter_range,
+       acc_var: "__result__",
+       acc_init: %AST.CreateMap{entries: []},
+       loop_condition: %AST.BoolLit{value: true},
+       loop_step: transform,
+       result: %AST.Ident{name: "__result__"},
+       kind: {:transform_map_entry, transform, filter_expr}
+     }}
+  end
+
+  # transformMapEntry(var1, var2, transform)
+  defp expand_comprehension("transformMapEntry", iter_range, [
+         %AST.Ident{name: var1},
+         %AST.Ident{name: var2},
+         transform
+       ]) do
+    {:ok,
+     %AST.Comprehension{
+       iter_var: var1,
+       iter_var2: var2,
+       iter_range: iter_range,
+       acc_var: "__result__",
+       acc_init: %AST.CreateMap{entries: []},
+       loop_condition: %AST.BoolLit{value: true},
+       loop_step: transform,
+       result: %AST.Ident{name: "__result__"},
+       kind: {:transform_map_entry, transform, nil}
+     }}
+  end
+
+  # sortBy(var, key_expr) — sort list by computed key
+  defp expand_comprehension("sortBy", iter_range, [%AST.Ident{name: var}, key_expr]) do
+    {:ok,
+     %AST.Comprehension{
+       iter_var: var,
+       iter_var2: nil,
+       iter_range: iter_range,
+       acc_var: "__result__",
+       acc_init: %AST.CreateList{elements: []},
+       loop_condition: %AST.BoolLit{value: true},
+       loop_step: %AST.BoolLit{value: false},
+       result: %AST.Ident{name: "__result__"},
+       kind: {:sort_by, key_expr}
      }}
   end
 

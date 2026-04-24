@@ -1,0 +1,5 @@
+has(config.host) &&
+config.host.size() > 0 &&
+config.port >= 1024 &&
+config.port <= 65535 &&
+config.env in ["development", "staging", "production"]

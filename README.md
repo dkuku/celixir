@@ -9,7 +9,7 @@ CEL is a non-Turing-complete expression language designed for simplicity, speed,
 ```elixir
 def deps do
   [
-    {:celixir, "~> 0.1.0"}
+    {:celixir, "~> 0.2.0"}
   ]
 end
 ```
@@ -210,6 +210,168 @@ Celixir.Program.eval(program, env |> Celixir.Environment.put_variable("price", 5
 # => {:ok, 45.0}
 ```
 
+## Extensions
+
+Celixir ships optional extension modules that mirror the `ext.*` packages from
+[cel-go](https://github.com/google/cel-go/tree/master/ext). Each module exposes
+a `register/1` function you pipe into your environment to activate.
+
+```elixir
+env =
+  Celixir.Environment.new()
+  |> Celixir.Ext.Math.register()
+  |> Celixir.Ext.Strings.register()
+  |> Celixir.Ext.Lists.register()
+  |> Celixir.Ext.Sets.register()
+  |> Celixir.Ext.Encoders.register()
+  |> Celixir.Ext.Regex.register()
+```
+
+### `Celixir.Ext.Math`
+
+Numeric and bitwise functions under the `math.*` namespace.
+
+```elixir
+env = Celixir.Environment.new() |> Celixir.Ext.Math.register()
+
+Celixir.eval!("math.sqrt(16.0)", env)          # => 4.0
+Celixir.eval!("math.ceil(1.2)", env)           # => 2.0
+Celixir.eval!("math.abs(-7)", env)             # => 7
+Celixir.eval!("math.isNaN(1.0/0.0)", env)      # => false
+Celixir.eval!("math.greatest(1, 3, 2)", env)   # => 3
+Celixir.eval!("math.least([5, 1, 3])", env)    # => 1
+Celixir.eval!("math.bitAnd(0b1010, 0b1100)", env) # => 8
+```
+
+| Function | Description |
+|---|---|
+| `math.ceil(double)` | ceiling |
+| `math.floor(double)` | floor |
+| `math.round(double)` | round (ties away from zero) |
+| `math.trunc(double)` | truncate fractional part |
+| `math.abs(int\|uint\|double)` | absolute value |
+| `math.sign(int\|uint\|double)` | -1, 0, or 1 |
+| `math.sqrt(int\|uint\|double)` | square root (NaN for negative) |
+| `math.isNaN(double)` | true if NaN |
+| `math.isInf(double)` | true if ±Inf |
+| `math.isFinite(double)` | true if neither NaN nor Inf |
+| `math.bitAnd(int, int)` | bitwise AND |
+| `math.bitOr(int, int)` | bitwise OR |
+| `math.bitXor(int, int)` | bitwise XOR |
+| `math.bitNot(int)` | bitwise NOT |
+| `math.bitShiftLeft(int, int)` | left shift |
+| `math.bitShiftRight(int, int)` | right shift |
+| `math.greatest(args...)` | variadic max |
+| `math.least(args...)` | variadic min |
+
+### `Celixir.Ext.Strings`
+
+Additional string functions.
+
+```elixir
+env = Celixir.Environment.new() |> Celixir.Ext.Strings.register()
+
+Celixir.eval!(~s|strings.quote("hello\nworld")|, env)
+# => "\"hello\\nworld\""
+```
+
+| Function | Description |
+|---|---|
+| `strings.quote(string)` | wrap in double quotes with Go-style escaping |
+
+### `Celixir.Ext.Lists`
+
+Extra list operations and the `sortBy`/`transformMapEntry` comprehension macros.
+
+```elixir
+env = Celixir.Environment.new() |> Celixir.Ext.Lists.register()
+
+Celixir.eval!("lists.range(5)", env)                       # => [0, 1, 2, 3, 4]
+Celixir.eval!("[1, 2, 1, 3].distinct()", env)              # => [1, 2, 3]
+Celixir.eval!("[1, 2, 3].first()", env)                    # => optional(1)
+Celixir.eval!("[1, 2, 3].last()", env)                     # => optional(3)
+Celixir.eval!("[1, [2, [3]]].flatten(2)", env)             # => [1, 2, 3]
+
+# sortBy macro
+Celixir.eval!(~s|[{"b": 2}, {"a": 1}].sortBy(x, x.key)|, env)
+
+# transformMapEntry macro
+Celixir.eval!(~s|{"a": 1, "b": 2}.transformMapEntry(k, v, {k: v * 10})|, env)
+```
+
+| Function | Description |
+|---|---|
+| `lists.range(n)` | `[0, 1, ..., n-1]` |
+| `list.distinct()` | deduplicate preserving order |
+| `list.first()` | optional first element |
+| `list.last()` | optional last element |
+| `list.flatten(depth)` | flatten to given depth |
+| `list.sortBy(var, key_expr)` | sort by computed key (macro) |
+| `map.transformMapEntry(k, v, transform [, filter])` | transform map entries (macro) |
+
+### `Celixir.Ext.Sets`
+
+Set-theoretic operations on lists treated as sets.
+
+```elixir
+env = Celixir.Environment.new() |> Celixir.Ext.Sets.register()
+
+Celixir.eval!("sets.contains([1,2,3], [2,3])", env)       # => true
+Celixir.eval!("sets.equivalent([1,2], [2,1])", env)       # => true
+Celixir.eval!("sets.intersects([1,2], [2,3])", env)       # => true
+```
+
+| Function | Description |
+|---|---|
+| `sets.contains(list, list)` | true if first list contains all elements of second |
+| `sets.equivalent(list, list)` | true if lists contain the same elements (order-independent) |
+| `sets.intersects(list, list)` | true if lists share at least one element |
+
+### `Celixir.Ext.Encoders`
+
+Base64 encoding and decoding.
+
+```elixir
+env = Celixir.Environment.new() |> Celixir.Ext.Encoders.register()
+
+Celixir.eval!("base64.encode(b'hello')", env)    # => "aGVsbG8="
+Celixir.eval!("base64.decode('aGVsbG8=')", env) # => b"hello"
+```
+
+| Function | Description |
+|---|---|
+| `base64.encode(bytes)` | encode bytes to base64 string |
+| `base64.decode(string)` | decode base64 string to bytes (error if invalid) |
+
+### `Celixir.Ext.Regex`
+
+Regular expression functions under the `regex.*` namespace.
+
+```elixir
+env = Celixir.Environment.new() |> Celixir.Ext.Regex.register()
+
+Celixir.eval!(~s|regex.replace("hello world", "hello", "hi")|, env)
+# => "hi world"
+
+Celixir.eval!(~s|regex.replace("aabbcc", "[a-z]", "x", 3)|, env)
+# => "xxxbcc"
+
+Celixir.eval!(~s|regex.extract("item-A", "item-(\\w+)").value()|, env)
+# => "A"
+
+Celixir.eval!(~s|regex.extractAll("id:1, id:2", "id:\\d+")|, env)
+# => ["id:1", "id:2"]
+```
+
+| Function | Description |
+|---|---|
+| `regex.replace(target, pattern, replacement)` | replace all matches |
+| `regex.replace(target, pattern, replacement, count)` | replace first N matches (0=keep, <0=all) |
+| `regex.extract(target, pattern)` | optional first match or first capture group |
+| `regex.extractAll(target, pattern)` | list of all matches or capture groups |
+
+> Use `\N` for backreferences in replacements. `$N`-style references are not supported.
+
 ## Compile-Time Sigil
 
 Parse expressions at compile time for zero runtime parsing cost:
@@ -243,7 +405,7 @@ Celixir.eval_ast(ast, %{request: %{method: "GET"}})
 - **Encoding**: `base64.encode()`, `base64.decode()`
 
 ### Comprehension Macros
-`all`, `exists`, `exists_one`, `filter`, `map`
+`all`, `exists`, `exists_one`, `filter`, `map`, `transformList`, `transformMap`, `sortBy`, `transformMapEntry`
 
 ### Optional Values
 `optional.of()`, `optional.none()`, `optional.ofNonZeroValue()`, `.hasValue()`, `.value()`, `.orValue()`, `.or()`
@@ -263,6 +425,8 @@ Optional pre-evaluation type validation:
 ## CEL Spec Conformance
 
 Celixir passes 2400/2427 (99%) of the upstream [cel-spec](https://github.com/google/cel-spec) conformance tests across 30 test suites covering arithmetic, strings, lists, comparisons, logic, macros, conversions, timestamps, protobuf field access, namespaces, optionals, type deductions, and more.
+
+The extension modules (`Celixir.Ext.*`) mirror the `ext.*` packages from cel-go and are covered by an additional 100+ tests.
 
 ## License
 

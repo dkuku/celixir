@@ -1,0 +1,1 @@
+math.ceil(math.sqrt(math.abs(x * x - y * y)))

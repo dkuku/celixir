@@ -1,7 +1,7 @@
 defmodule Celixir.MixProject do
   use Mix.Project
 
-  @version "0.1.0"
+  @version "0.2.0"
   @source_url "https://github.com/dkuku/celixir"
 
   def project do
@@ -52,6 +52,16 @@ defmodule Celixir.MixProject do
       extras: ["README.md", "guides/tutorial.md", "CHANGELOG.md"],
       groups_for_extras: [
         Guides: ["guides/tutorial.md"]
+      ],
+      groups_for_modules: [
+        Extensions: [
+          Celixir.Ext.Math,
+          Celixir.Ext.Strings,
+          Celixir.Ext.Lists,
+          Celixir.Ext.Sets,
+          Celixir.Ext.Encoders,
+          Celixir.Ext.Regex
+        ]
       ],
       source_ref: "v#{@version}"
     ]

@@ -1,0 +1,1 @@
+message.trim().split(" ").filter(w, w.size() > 3).map(w, w.upperAscii()).join(", ")

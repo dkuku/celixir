@@ -1,0 +1,4 @@
+scores
+  .filter(s, s >= 60)
+  .map(s, s >= 90 ? "A" : s >= 80 ? "B" : s >= 70 ? "C" : "D")
+  .sortBy(g, g)

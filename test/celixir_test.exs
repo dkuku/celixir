@@ -1004,6 +1004,192 @@ defmodule CelixirTest do
     end
   end
 
+  describe "math.sqrt extension" do
+    test "sqrt of positive float" do
+      assert Celixir.eval!("math.sqrt(4.0)") == 2.0
+      assert Celixir.eval!("math.sqrt(9.0)") == 3.0
+      assert Celixir.eval!("math.sqrt(2.0)") == :math.sqrt(2.0)
+    end
+
+    test "sqrt of positive int" do
+      assert Celixir.eval!("math.sqrt(81)") == 9.0
+      assert Celixir.eval!("math.sqrt(0)") == 0.0
+    end
+
+    test "sqrt of negative returns NaN" do
+      assert Celixir.eval!("math.isNaN(math.sqrt(-1.0))") == true
+      assert Celixir.eval!("math.isNaN(math.sqrt(-15))") == true
+    end
+
+    test "sqrt of special floats passes through" do
+      assert Celixir.eval!("math.isNaN(math.sqrt(0.0/0.0))") == true
+      assert Celixir.eval!("math.sqrt(1.0/0.0)") == :infinity
+    end
+  end
+
+  describe "lists.range extension" do
+    test "range generates 0..n-1" do
+      assert Celixir.eval!("lists.range(5)") == [0, 1, 2, 3, 4]
+      assert Celixir.eval!("lists.range(0)") == []
+      assert Celixir.eval!("lists.range(1)") == [0]
+    end
+
+    test "range with negative argument errors" do
+      assert {:error, _} = Celixir.eval("lists.range(-1)")
+    end
+  end
+
+  describe "list.distinct extension" do
+    test "removes duplicates preserving order" do
+      assert Celixir.eval!("[1, 2, 2, 3, 3, 3].distinct()") == [1, 2, 3]
+      assert Celixir.eval!("[1].distinct()") == [1]
+      assert Celixir.eval!("[].distinct()") == []
+    end
+
+    test "distinct with strings" do
+      assert Celixir.eval!(~S|["b", "b", "c", "a", "c"].distinct()|) == ["b", "c", "a"]
+    end
+
+    test "distinct with mixed types preserves all" do
+      assert Celixir.eval!(~S|[1, "b", 2, "b"].distinct()|) == [1, "b", 2]
+    end
+  end
+
+  describe "list.first and list.last extensions" do
+    test "first returns optional" do
+      assert Celixir.eval!("[1, 2, 3].first().value()") == 1
+      assert Celixir.eval!("[1, 2, 3].first().hasValue()") == true
+      assert Celixir.eval!("[].first().hasValue()") == false
+      assert Celixir.eval!("[].first().orValue(99)") == 99
+    end
+
+    test "last returns optional" do
+      assert Celixir.eval!("[1, 2, 3].last().value()") == 3
+      assert Celixir.eval!("[1, 2, 3].last().hasValue()") == true
+      assert Celixir.eval!("[].last().hasValue()") == false
+      assert Celixir.eval!("[].last().orValue('test')") == "test"
+    end
+  end
+
+  describe "list.flatten with depth extension" do
+    test "flatten with depth 0 is identity" do
+      assert Celixir.eval!("[1, [2, 3]].flatten(0)") == [1, [2, 3]]
+    end
+
+    test "flatten with depth 1" do
+      assert Celixir.eval!("[1, [2, [3, 4]]].flatten(1)") == [1, 2, [3, 4]]
+    end
+
+    test "flatten with depth 2" do
+      assert Celixir.eval!("[1, [2, [3, [4]]]].flatten(2)") == [1, 2, 3, [4]]
+    end
+
+    test "flatten with negative depth errors" do
+      assert {:error, _} = Celixir.eval("[1, [2]].flatten(-1)")
+    end
+  end
+
+  describe "list.sortBy extension" do
+    test "sortBy numeric field" do
+      result =
+        Celixir.eval!("""
+        [[1, 10], [2, 1], [3, 5]].sortBy(e, e[1])
+        """)
+
+      assert result == [[2, 1], [3, 5], [1, 10]]
+    end
+
+    test "sortBy with simple list" do
+      assert Celixir.eval!("[3, 1, 2].sortBy(e, e)") == [1, 2, 3]
+    end
+
+    test "sortBy with strings" do
+      assert Celixir.eval!(~S|["banana", "apple", "cherry"].sortBy(e, e)|) ==
+               ["apple", "banana", "cherry"]
+    end
+  end
+
+  describe "transformMapEntry extension" do
+    test "basic key-value swap" do
+      result = Celixir.eval!(~S|{"greeting": "hello"}.transformMapEntry(k, v, {v: k})|)
+      assert result == %{"hello" => "greeting"}
+    end
+
+    test "list to reverse-index map" do
+      result = Celixir.eval!("[1, 2, 3].transformMapEntry(i, v, {v: i})")
+      assert result == %{1 => 0, 2 => 1, 3 => 2}
+    end
+
+    test "duplicate key produces error" do
+      assert {:error, _} =
+               Celixir.eval(~S|{"a": "x", "b": "x"}.transformMapEntry(k, v, {v: k})|)
+    end
+  end
+
+  describe "regex extensions" do
+    test "regex.replace replaces all occurrences" do
+      assert Celixir.eval!(~s|regex.replace("hello world hello", "hello", "hi")|) ==
+               "hi world hi"
+    end
+
+    test "regex.replace with count=0 returns original" do
+      assert Celixir.eval!(~s|regex.replace("banana", "a", "x", 0)|) == "banana"
+    end
+
+    test "regex.replace with count=1" do
+      assert Celixir.eval!(~s|regex.replace("banana", "a", "x", 1)|) == "bxnana"
+    end
+
+    test "regex.replace with count=2" do
+      assert Celixir.eval!(~s|regex.replace("banana", "a", "x", 2)|) == "bxnxna"
+    end
+
+    test "regex.replace with negative count replaces all" do
+      assert Celixir.eval!(~s|regex.replace("banana", "a", "x", -12)|) == "bxnxnx"
+    end
+
+    test "regex.replace with capture group backreferences" do
+      assert Celixir.eval!(~s|regex.replace("foo bar", "(fo)o (ba)r", "\\\\2 \\\\1")|) ==
+               "ba fo"
+    end
+
+    test "regex.replace with invalid replacement errors" do
+      assert {:error, _} = Celixir.eval(~s|regex.replace("test", "(.)", "$2")|)
+    end
+
+    test "regex.replace with invalid pattern errors" do
+      assert {:error, _} = Celixir.eval(~s|regex.replace("foo", "(", "x")|)
+    end
+
+    test "regex.extract returns optional match" do
+      assert Celixir.eval!(~s|regex.extract("hello world", "hello(.*)").value()|) == " world"
+      assert Celixir.eval!(~s|regex.extract("item-A", "item-(\\\\w+)").value()|) == "A"
+    end
+
+    test "regex.extract returns optional.none when no match" do
+      assert Celixir.eval!(~s|regex.extract("HELLO", "hello").hasValue()|) == false
+    end
+
+    test "regex.extract with multiple groups errors" do
+      assert {:error, _} =
+               Celixir.eval(~s|regex.extract("testuser@domain", "(.*)@([^.]*)")|)
+    end
+
+    test "regex.extractAll returns all matches" do
+      assert Celixir.eval!(~s|regex.extractAll("id:123, id:456", "id:\\\\d+")|) ==
+               ["id:123", "id:456"]
+    end
+
+    test "regex.extractAll returns empty list when no match" do
+      assert Celixir.eval!(~s|regex.extractAll("id:123", "assa")|) == []
+    end
+
+    test "regex.extractAll with multiple groups errors" do
+      assert {:error, _} =
+               Celixir.eval(~s|regex.extractAll("user@domain", "(.*)@([^.]*)")|)
+    end
+  end
+
   describe "raw strings" do
     test "raw single-quoted" do
       assert Celixir.eval!(~S|r'\n'|) == "\\n"

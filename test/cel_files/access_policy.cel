@@ -1,0 +1,4 @@
+request.method in ["GET", "HEAD"] ||
+(request.method == "POST" &&
+ request.auth.role in ["admin", "editor"] &&
+ request.path.startsWith("/api/"))

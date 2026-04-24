@@ -1,0 +1,2 @@
+requests_per_minute <= max_rate &&
+(tier == "premium" || requests_per_minute <= free_tier_limit)
