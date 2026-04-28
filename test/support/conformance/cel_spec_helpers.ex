@@ -44,7 +44,37 @@ defmodule Celixir.CelSpecHelpers do
                 {"proto2_ext", "has_ext", "package_scoped_test_all_types_nested_enum_ext"},
                 {"proto2_ext", "has_ext", "package_scoped_repeated_test_all_types"},
                 # Nanosecond precision in wrapper to_json (Elixir DateTime only supports microseconds)
-                {"wrappers", "timestamp", "to_json"}
+                {"wrappers", "timestamp", "to_json"},
+                # Native int/uint/bytes — no type distinction, no overflow, no range checks
+                {"conversions", "type", "uint"},
+                {"conversions", "type", "bytes"},
+                {"conversions", "type", "eq_diff"},
+                {"conversions", "uint", "int_neg"},
+                {"conversions", "uint", "double_uint_max_range"},
+                {"conversions", "uint", "double_range_beyond_uint"},
+                {"conversions", "int", "uint_range"},
+                {"conversions", "int", "double_int_max_range"},
+                {"conversions", "int", "double_int_min_range"},
+                {"conversions", "int", "double_range"},
+                {"conversions", "string", "bytes_invalid"},
+                {"integer_math", "int64_math", "int64_overflow_positive"},
+                {"integer_math", "int64_math", "int64_overflow_negative"},
+                {"integer_math", "int64_math", "int64_overflow_add_negative"},
+                {"integer_math", "int64_math", "int64_overflow_sub_positive"},
+                {"integer_math", "int64_math", "int64_overflow_mul_positive"},
+                {"integer_math", "int64_math", "int64_overflow_mul_negative"},
+                {"integer_math", "int64_math", "int64_min_negate"},
+                {"integer_math", "int64_math", "int64_min_negate_mul"},
+                {"integer_math", "int64_math", "int64_min_negate_div"},
+                {"integer_math", "int64_math", "unary_minus_no_overload"},
+                {"integer_math", "int64_math", "uint64_overflow_positive"},
+                {"integer_math", "int64_math", "uint64_overflow_negative"},
+                {"integer_math", "int64_math", "uint64_overflow_mul_positive"},
+                {"integer_math", "uint64_math", "negative_no_overload"},
+                {"math_ext", "bit_not", "uint_positive"},
+                {"math_ext", "bit_not", "uint_zero"},
+                {"math_ext", "abs", "int_overflow"},
+                {"wrappers", "bytes", "to_json"}
               ])
 
   def skip_tests, do: @skip_tests
@@ -113,7 +143,7 @@ defmodule Celixir.CelSpecHelpers do
   def convert_value({:double, v}) when is_atom(v), do: v
   def convert_value({:bool, v}), do: v
   def convert_value({:string, v}), do: v
-  def convert_value({:bytes, v}), do: {:cel_bytes, v}
+  def convert_value({:bytes, v}), do: v
   def convert_value({:null, _}), do: nil
 
   def convert_value({:duration, seconds, nanos}) do

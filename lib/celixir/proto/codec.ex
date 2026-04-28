@@ -196,7 +196,7 @@ if Code.ensure_loaded?(Protobuf) do
     defp cel_zero_value?(0, _fp), do: true
     defp cel_zero_value?(v, _fp) when is_float(v) and v == 0.0, do: true
     defp cel_zero_value?(false, _fp), do: true
-    defp cel_zero_value?("", fp), do: fp.type == :string
+    defp cel_zero_value?("", fp), do: fp.type in [:string, :bytes]
     defp cel_zero_value?([], _fp), do: true
     defp cel_zero_value?(m, _fp) when is_map(m) and map_size(m) == 0, do: true
 

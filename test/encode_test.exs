@@ -4,10 +4,10 @@ defmodule Celixir.EncodeTest do
   alias Celixir.Types.Optional
 
   describe "encode/1" do
-    test "integers become cel_int" do
-      assert Celixir.encode(42) == {:cel_int, 42}
-      assert Celixir.encode(0) == {:cel_int, 0}
-      assert Celixir.encode(-5) == {:cel_int, -5}
+    test "integers pass through" do
+      assert Celixir.encode(42) == 42
+      assert Celixir.encode(0) == 0
+      assert Celixir.encode(-5) == -5
     end
 
     test "strings pass through" do
@@ -28,17 +28,17 @@ defmodule Celixir.EncodeTest do
     end
 
     test "lists are recursively encoded" do
-      assert Celixir.encode([1, 2, 3]) == [{:cel_int, 1}, {:cel_int, 2}, {:cel_int, 3}]
-      assert Celixir.encode(["a", 1]) == ["a", {:cel_int, 1}]
+      assert Celixir.encode([1, 2, 3]) == [1, 2, 3]
+      assert Celixir.encode(["a", 1]) == ["a", 1]
     end
 
     test "maps are recursively encoded" do
-      assert Celixir.encode(%{"a" => 1}) == %{"a" => {:cel_int, 1}}
-      assert Celixir.encode(%{1 => "x"}) == %{{:cel_int, 1} => "x"}
+      assert Celixir.encode(%{"a" => 1}) == %{"a" => 1}
+      assert Celixir.encode(%{1 => "x"}) == %{1 => "x"}
     end
 
     test "optional with value" do
-      assert Celixir.encode({:optional, 42}) == %Optional{has_value: true, value: {:cel_int, 42}}
+      assert Celixir.encode({:optional, 42}) == %Optional{has_value: true, value: 42}
     end
 
     test "optional none" do
@@ -47,22 +47,21 @@ defmodule Celixir.EncodeTest do
 
     test "nested structures" do
       input = %{"list" => [1, 2], "nested" => %{"x" => 3}}
-      expected = %{"list" => [{:cel_int, 1}, {:cel_int, 2}], "nested" => %{"x" => {:cel_int, 3}}}
-      assert Celixir.encode(input) == expected
+      assert Celixir.encode(input) == input
     end
   end
 
   describe "encode_uint/1" do
-    test "encodes as cel_uint" do
-      assert Celixir.encode_uint(42) == {:cel_uint, 42}
-      assert Celixir.encode_uint(0) == {:cel_uint, 0}
+    test "unsigned integers pass through" do
+      assert Celixir.encode_uint(42) == 42
+      assert Celixir.encode_uint(0) == 0
     end
   end
 
   describe "encode_bytes/1" do
-    test "encodes as cel_bytes" do
-      assert Celixir.encode_bytes(<<1, 2, 3>>) == {:cel_bytes, <<1, 2, 3>>}
-      assert Celixir.encode_bytes("hello") == {:cel_bytes, "hello"}
+    test "bytes pass through" do
+      assert Celixir.encode_bytes(<<1, 2, 3>>) == <<1, 2, 3>>
+      assert Celixir.encode_bytes("hello") == "hello"
     end
   end
 

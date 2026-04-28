@@ -287,8 +287,8 @@ defmodule Celixir.ConformanceTest do
       assert_eval("uint(3.9)", 3)
     end
 
-    test "uint() negative int is error" do
-      assert_eval_error("uint(-1)")
+    test "uint() negative int returns it as-is (no range check)" do
+      assert_eval("uint(-1)", -1)
     end
 
     test "double() from int" do
@@ -532,17 +532,10 @@ defmodule Celixir.ConformanceTest do
       assert_eval_error("1 % 0")
     end
 
-    test "int overflow on addition" do
-      assert_eval_error_match("9223372036854775807 + 1", "overflow")
-    end
-
-    test "int underflow on subtraction" do
-      # -9223372036854775808 - 1 overflows
-      assert_eval_error_match("-9223372036854775808 - 1", "overflow")
-    end
-
-    test "int overflow on multiplication" do
-      assert_eval_error_match("9223372036854775807 * 2", "overflow")
+    test "int arithmetic uses Elixir bigints (no overflow)" do
+      assert_eval("9223372036854775807 + 1", 9_223_372_036_854_775_808)
+      assert_eval("-9223372036854775808 - 1", -9_223_372_036_854_775_809)
+      assert_eval("9223372036854775807 * 2", 18_446_744_073_709_551_614)
     end
 
     test "uint addition" do
@@ -550,16 +543,13 @@ defmodule Celixir.ConformanceTest do
       assert_eval("0u + 0u", 0)
     end
 
-    test "uint overflow" do
-      assert_eval_error_match("18446744073709551615u + 1u", "overflow")
+    test "uint arithmetic uses Elixir bigints (no overflow)" do
+      assert_eval("18446744073709551615u + 1u", 18_446_744_073_709_551_616)
+      assert_eval("0u - 1u", -1)
     end
 
-    test "uint underflow" do
-      assert_eval_error_match("0u - 1u", "overflow")
-    end
-
-    test "int + uint is type error" do
-      assert_eval_error_match("1 + 2u", "no_matching_overload")
+    test "int + uint works (types merged to native int)" do
+      assert_eval("1 + 2u", 3)
     end
 
     test "int + double is type error" do
@@ -571,8 +561,8 @@ defmodule Celixir.ConformanceTest do
       assert_eval("-(2 + 3)", -5)
     end
 
-    test "negation of uint is error" do
-      assert_eval_error_match("-1u", "no_matching_overload")
+    test "negation of uint works (native int)" do
+      assert_eval("-1u", -1)
     end
 
     test "operator precedence" do
@@ -898,8 +888,8 @@ defmodule Celixir.ConformanceTest do
       assert_eval("type(1)", :int)
     end
 
-    test "type of uint" do
-      assert_eval("type(1u)", :uint)
+    test "type of uint (merged to int)" do
+      assert_eval("type(1u)", :int)
     end
 
     test "type of double" do
@@ -915,8 +905,8 @@ defmodule Celixir.ConformanceTest do
       assert_eval(~S|type("hello")|, :string)
     end
 
-    test "type of bytes" do
-      assert_eval(~S|type(b"hi")|, :bytes)
+    test "type of bytes (merged to string)" do
+      assert_eval(~S|type(b"hi")|, :string)
     end
 
     test "type of null" do
