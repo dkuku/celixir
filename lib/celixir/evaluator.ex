@@ -2650,4 +2650,100 @@ defmodule Celixir.Evaluator do
      Bitwise.band(Bitwise.bsr(n, 16), 0xFFFF), Bitwise.band(n, 0xFFFF)}
   end
 
+  # ===================================================================
+  # Public API for Celixir.Compiler.Runtime
+  # ===================================================================
+
+  @doc false
+  def dispatch_function(name, args, env), do: call_function(name, args, env)
+
+  @doc false
+  def dispatch_method(name, target, args, env), do: call_method(name, target, args, env)
+
+  @doc false
+  def dispatch_add(a, b), do: do_add(a, b)
+
+  @doc false
+  def dispatch_sub(a, b), do: do_sub(a, b)
+
+  @doc false
+  def dispatch_mul(a, b), do: do_mul(a, b)
+
+  @doc false
+  def dispatch_div(a, b), do: do_div(a, b)
+
+  @doc false
+  def dispatch_mod(a, b), do: do_mod(a, b)
+
+  @doc false
+  def dispatch_compare(op, a, b), do: do_compare(op, a, b)
+
+  @doc false
+  def dispatch_equal?(a, b), do: cel_equal?(a, b)
+
+  @doc false
+  def dispatch_typeof(v), do: cel_typeof(v)
+
+  @doc false
+  def dispatch_select(target, field, test_only) do
+    if test_only, do: select_test(target, field), else: select_field(target, field)
+  end
+
+  @doc false
+  def dispatch_index(target, idx), do: do_index(target, idx)
+
+  @doc false
+  def dispatch_opt_select(target, field), do: opt_select_field(target, field)
+
+  @doc false
+  def dispatch_opt_index(target, idx), do: opt_index(target, idx)
+
+  @doc false
+  def dispatch_normalize(v), do: normalize(v)
+
+  @doc false
+  def dispatch_qualify_select(env, operand_val, field, qualified, test_only) do
+    with :not_type <- try_qualified_type_static(qualified),
+         :not_var <- try_qualified_variable_static(env, qualified) do
+      if test_only, do: select_test(operand_val, field), else: select_field(operand_val, field)
+    else
+      {:ok, type_val} -> type_val
+      {:var, val} -> if test_only, do: val != nil, else: normalize(val)
+    end
+  end
+
+  defp try_qualified_type_static("NullValue.NULL_VALUE"), do: {:ok, 0}
+
+  defp try_qualified_type_static(qualified) do
+    cond do
+      Proto.well_known_type?(qualified) or Proto.get_schema(qualified) != nil ->
+        {:ok, {:cel_type, qualified}}
+
+      qualified in ["net.IP", "net.CIDR"] ->
+        {:ok, {:cel_type, qualified}}
+
+      true ->
+        case String.split(qualified, ".") do
+          parts when length(parts) >= 2 ->
+            field = List.last(parts)
+            prefix = Enum.join(Enum.drop(parts, -1), ".")
+
+            case get_in(@enum_values, [prefix, field]) do
+              nil -> :not_type
+              int_val -> {:ok, int_val}
+            end
+
+          _ ->
+            :not_type
+        end
+    end
+  end
+
+  defp try_qualified_variable_static(env, qualified) do
+    case Environment.get_variable(env, qualified) do
+      {:ok, val} -> {:var, val}
+      :error -> :not_var
+    end
+  end
+
 end

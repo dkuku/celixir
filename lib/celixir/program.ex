@@ -10,28 +10,39 @@ defmodule Celixir.Program do
       {:ok, false} = Celixir.Program.eval(program, %{x: 5, y: 5})
   """
 
-  defstruct [:ast, :source]
+  defstruct [:ast, :source, :fun]
 
   @type t :: %__MODULE__{
           ast: Celixir.AST.expr(),
-          source: String.t()
+          source: String.t(),
+          fun: (Celixir.Environment.t() -> {:ok, any()} | {:error, String.t()}) | nil
         }
 
-  @doc "Creates a program from a parsed AST."
+  @doc "Creates a program from a parsed AST, compiling to a native function."
   def new(ast, source \\ "<compiled>") do
-    %__MODULE__{ast: ast, source: source}
+    fun =
+      case Celixir.Compiler.compile(ast) do
+        {:ok, f} -> f
+        {:error, _} -> nil
+      end
+
+    %__MODULE__{ast: ast, source: source, fun: fun}
   end
 
   @doc "Evaluates the program with the given bindings."
-  def eval(%__MODULE__{ast: ast}, bindings \\ %{}) do
+  def eval(%__MODULE__{fun: fun, ast: ast}, bindings \\ %{}) do
     env =
       case bindings do
         %Celixir.Environment{} = e -> e
         map when is_map(map) -> Celixir.Environment.new(map)
       end
 
-    with {:ok, result} <- Celixir.Evaluator.eval(ast, env) do
-      {:ok, Celixir.unwrap(result)}
+    if fun do
+      fun.(env)
+    else
+      with {:ok, result} <- Celixir.Evaluator.eval(ast, env) do
+        {:ok, Celixir.unwrap(result)}
+      end
     end
   end
 

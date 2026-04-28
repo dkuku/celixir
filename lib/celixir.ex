@@ -246,7 +246,8 @@ defmodule Celixir do
   """
   @spec to_fun(String.t()) :: {:ok, (map() -> {:ok, any()} | {:error, String.t()})} | {:error, String.t()}
   def to_fun(expression) do
-    with {:ok, ast} <- parse(expression) do
+    with {:ok, ast} <- parse(expression),
+         {:ok, compiled_fun} <- Celixir.Compiler.compile(ast) do
       fun = fn bindings ->
         env =
           case bindings do
@@ -254,12 +255,12 @@ defmodule Celixir do
             map when is_map(map) -> Environment.new(map)
           end
 
-        with {:ok, result} <- Evaluator.eval(ast, env) do
-          {:ok, unwrap(result)}
-        end
+        compiled_fun.(env)
       end
 
       {:ok, fun}
+    else
+      {:error, _} = err -> err
     end
   end
 
