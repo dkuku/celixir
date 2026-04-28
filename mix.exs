@@ -34,7 +34,8 @@ defmodule Celixir.MixProject do
       {:tz, "~> 0.28"},
       {:styler, "~> 1.0", only: [:dev, :test], runtime: false},
       {:ex_doc, "~> 0.40", only: :dev, runtime: false},
-      {:makeup_cel, "~> 0.1.0", only: :dev, runtime: false}
+      {:makeup_cel, "~> 0.1.0", only: :dev, runtime: false},
+      {:benchee, "~> 1.0", only: :dev, runtime: false}
     ]
   end
 

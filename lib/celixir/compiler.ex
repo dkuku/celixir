@@ -22,10 +22,11 @@ defmodule Celixir.Compiler do
           | {:error, String.t()}
   def compile(ast) do
     body = to_quoted(ast)
+    module_name = :"Celixir.Compiled.#{:erlang.unique_integer([:positive, :monotonic])}"
 
-    fun_quoted =
+    eval_fn =
       quote do
-        fn __cel_env__ ->
+        def eval(__cel_env__) do
           case unquote(body) do
             {:cel_error, msg} -> {:error, msg}
             v -> {:ok, Celixir.unwrap(v)}
@@ -33,8 +34,8 @@ defmodule Celixir.Compiler do
         end
       end
 
-    {fun, _} = Code.eval_quoted(fun_quoted, [], __ENV__)
-    {:ok, fun}
+    Module.create(module_name, eval_fn, __ENV__)
+    {:ok, :erlang.make_fun(module_name, :eval, 1)}
   rescue
     e -> {:error, "compile error: #{Exception.message(e)}"}
   end
