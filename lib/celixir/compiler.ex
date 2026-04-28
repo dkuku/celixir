@@ -243,6 +243,10 @@ defmodule Celixir.Compiler do
       {:sort_by, key_expr} ->
         free_variables(key_expr, inner_bound, acc3)
 
+      {:collect_list, filter_expr, transform_expr} ->
+        acc4 = free_variables(transform_expr, inner_bound, acc3)
+        if filter_expr, do: free_variables(filter_expr, inner_bound, acc4), else: acc4
+
       :standard ->
         acc3
     end
@@ -363,6 +367,10 @@ defmodule Celixir.Compiler do
 
         {:sort_by, k} ->
           namespace_base_idents(k, a)
+
+        {:collect_list, f, t} ->
+          a2 = namespace_base_idents(t, a)
+          if f, do: namespace_base_idents(f, a2), else: a2
 
         :standard ->
           a
@@ -776,6 +784,19 @@ defmodule Celixir.Compiler do
         {:sort_by, key_expr} ->
           kq = to_quoted(key_expr, inner_ctx)
           quote do: {:sort_by, fn __cel_env__, unquote(v1), unquote(v2), unquote(acc) -> unquote(kq) end}
+
+        {:collect_list, filter_expr, transform_expr} ->
+          tq = to_quoted(transform_expr, inner_ctx)
+
+          fq =
+            if filter_expr do
+              fq_body = to_quoted(filter_expr, inner_ctx)
+              quote do: fn __cel_env__, unquote(v1), unquote(v2), unquote(acc) -> unquote(fq_body) end
+            else
+              nil
+            end
+
+          quote do: {:collect_list, fn __cel_env__, unquote(v1), unquote(v2), unquote(acc) -> unquote(tq) end, unquote(fq)}
 
         :standard ->
           quote do: :standard

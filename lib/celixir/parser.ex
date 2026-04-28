@@ -630,16 +630,9 @@ defmodule Celixir.Parser do
        acc_var: "__result__",
        acc_init: %AST.CreateList{elements: []},
        loop_condition: %AST.BoolLit{value: true},
-       loop_step: %AST.Ternary{
-         condition: predicate,
-         true_expr: %AST.BinaryOp{
-           op: :add,
-           left: %AST.Ident{name: "__result__"},
-           right: %AST.CreateList{elements: [%AST.Ident{name: var2}]}
-         },
-         false_expr: %AST.Ident{name: "__result__"}
-       },
-       result: %AST.Ident{name: "__result__"}
+       loop_step: %AST.BoolLit{value: false},
+       result: %AST.Ident{name: "__result__"},
+       kind: {:collect_list, predicate, %AST.Ident{name: var2}}
      }}
   end
 
@@ -653,16 +646,9 @@ defmodule Celixir.Parser do
        acc_var: "__result__",
        acc_init: %AST.CreateList{elements: []},
        loop_condition: %AST.BoolLit{value: true},
-       loop_step: %AST.Ternary{
-         condition: predicate,
-         true_expr: %AST.BinaryOp{
-           op: :add,
-           left: %AST.Ident{name: "__result__"},
-           right: %AST.CreateList{elements: [transform]}
-         },
-         false_expr: %AST.Ident{name: "__result__"}
-       },
-       result: %AST.Ident{name: "__result__"}
+       loop_step: %AST.BoolLit{value: false},
+       result: %AST.Ident{name: "__result__"},
+       kind: {:collect_list, predicate, transform}
      }}
   end
 
@@ -677,12 +663,9 @@ defmodule Celixir.Parser do
        acc_var: "__result__",
        acc_init: %AST.CreateList{elements: []},
        loop_condition: %AST.BoolLit{value: true},
-       loop_step: %AST.BinaryOp{
-         op: :add,
-         left: %AST.Ident{name: "__result__"},
-         right: %AST.CreateList{elements: [transform]}
-       },
-       result: %AST.Ident{name: "__result__"}
+       loop_step: %AST.BoolLit{value: false},
+       result: %AST.Ident{name: "__result__"},
+       kind: {:collect_list, nil, transform}
      }}
   end
 
@@ -701,16 +684,9 @@ defmodule Celixir.Parser do
        acc_var: "__result__",
        acc_init: %AST.CreateList{elements: []},
        loop_condition: %AST.BoolLit{value: true},
-       loop_step: %AST.Ternary{
-         condition: predicate,
-         true_expr: %AST.BinaryOp{
-           op: :add,
-           left: %AST.Ident{name: "__result__"},
-           right: %AST.CreateList{elements: [transform]}
-         },
-         false_expr: %AST.Ident{name: "__result__"}
-       },
-       result: %AST.Ident{name: "__result__"}
+       loop_step: %AST.BoolLit{value: false},
+       result: %AST.Ident{name: "__result__"},
+       kind: {:collect_list, predicate, transform}
      }}
   end
 
@@ -724,12 +700,9 @@ defmodule Celixir.Parser do
        acc_var: "__result__",
        acc_init: %AST.CreateList{elements: []},
        loop_condition: %AST.BoolLit{value: true},
-       loop_step: %AST.BinaryOp{
-         op: :add,
-         left: %AST.Ident{name: "__result__"},
-         right: %AST.CreateList{elements: [transform]}
-       },
-       result: %AST.Ident{name: "__result__"}
+       loop_step: %AST.BoolLit{value: false},
+       result: %AST.Ident{name: "__result__"},
+       kind: {:collect_list, nil, transform}
      }}
   end
 
@@ -892,7 +865,6 @@ defmodule Celixir.Parser do
   end
 
   defp expand_comprehension("filter", iter_range, [%AST.Ident{name: var}, predicate]) do
-    # __result__ starts [], appends item when predicate is true
     {:ok,
      %AST.Comprehension{
        iter_var: var,
@@ -900,16 +872,9 @@ defmodule Celixir.Parser do
        acc_var: "__result__",
        acc_init: %AST.CreateList{elements: []},
        loop_condition: %AST.BoolLit{value: true},
-       loop_step: %AST.Ternary{
-         condition: predicate,
-         true_expr: %AST.BinaryOp{
-           op: :add,
-           left: %AST.Ident{name: "__result__"},
-           right: %AST.CreateList{elements: [%AST.Ident{name: var}]}
-         },
-         false_expr: %AST.Ident{name: "__result__"}
-       },
-       result: %AST.Ident{name: "__result__"}
+       loop_step: %AST.BoolLit{value: false},
+       result: %AST.Ident{name: "__result__"},
+       kind: {:collect_list, predicate, %AST.Ident{name: var}}
      }}
   end
 
@@ -922,12 +887,9 @@ defmodule Celixir.Parser do
        acc_var: "__result__",
        acc_init: %AST.CreateList{elements: []},
        loop_condition: %AST.BoolLit{value: true},
-       loop_step: %AST.BinaryOp{
-         op: :add,
-         left: %AST.Ident{name: "__result__"},
-         right: %AST.CreateList{elements: [transform]}
-       },
-       result: %AST.Ident{name: "__result__"}
+       loop_step: %AST.BoolLit{value: false},
+       result: %AST.Ident{name: "__result__"},
+       kind: {:collect_list, nil, transform}
      }}
   end
 
@@ -940,16 +902,9 @@ defmodule Celixir.Parser do
        acc_var: "__result__",
        acc_init: %AST.CreateList{elements: []},
        loop_condition: %AST.BoolLit{value: true},
-       loop_step: %AST.Ternary{
-         condition: predicate,
-         true_expr: %AST.BinaryOp{
-           op: :add,
-           left: %AST.Ident{name: "__result__"},
-           right: %AST.CreateList{elements: [transform]}
-         },
-         false_expr: %AST.Ident{name: "__result__"}
-       },
-       result: %AST.Ident{name: "__result__"}
+       loop_step: %AST.BoolLit{value: false},
+       result: %AST.Ident{name: "__result__"},
+       kind: {:collect_list, predicate, transform}
      }}
   end
 

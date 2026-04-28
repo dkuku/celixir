@@ -573,21 +573,24 @@ defmodule Celixir.Checker do
     # For general: infer result expression
     result_type = infer(comp.result, inner_env)
 
-    # If the loop_step produces a list, refine the element type
     case result_type do
       {:error, _} = err ->
         err
 
       _ ->
-        step_type = infer(comp.loop_step, inner_env)
-
-        case step_type do
-          {:list, _step_elem} ->
-            # This is a map/filter — the step builds a list
-            step_type
+        case comp.kind do
+          {:collect_list, _filter_expr, transform_expr} ->
+            # Infer element type from the transform expression directly
+            {:list, infer(transform_expr, inner_env)}
 
           _ ->
-            result_type
+            # For standard/transform_map/sort_by: infer from loop_step
+            step_type = infer(comp.loop_step, inner_env)
+
+            case step_type do
+              {:list, _} -> step_type
+              _ -> result_type
+            end
         end
     end
   end

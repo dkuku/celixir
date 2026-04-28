@@ -337,6 +337,9 @@ defmodule Celixir.Evaluator do
           {:sort_by, key_expr} ->
             eval_sort_by(items, comp, key_expr, env)
 
+          {:collect_list, filter_expr, transform_expr} ->
+            eval_collect_list(items, comp, filter_expr, transform_expr, env)
+
           :standard ->
             eval_standard_comprehension(items, comp, acc, env)
         end
@@ -411,6 +414,39 @@ defmodule Celixir.Evaluator do
         {:cont, do_eval(comp.loop_step, loop_env)}
       end
     end)
+  end
+
+  defp eval_collect_list(items, comp, filter_expr, transform_expr, env) do
+    result =
+      Enum.reduce_while(items, [], fn item, acc ->
+        loop_env = env |> bind_iter_vars(comp, item) |> Environment.put_local(comp.acc_var, acc)
+
+        include =
+          if filter_expr do
+            do_eval(filter_expr, loop_env)
+          else
+            true
+          end
+
+        case include do
+          {:cel_error, _} = err ->
+            {:halt, err}
+
+          false ->
+            {:cont, acc}
+
+          _ ->
+            case do_eval(transform_expr, loop_env) do
+              {:cel_error, _} = err -> {:halt, err}
+              val -> {:cont, [val | acc]}
+            end
+        end
+      end)
+
+    case result do
+      {:cel_error, _} = err -> err
+      list -> Enum.reverse(list)
+    end
   end
 
   defp eval_transform_map(items, comp, transform_expr, filter_expr, acc, env) do

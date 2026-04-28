@@ -255,6 +255,21 @@ defmodule Celixir.Compiler.Runtime do
     run_comprehension(env, range, iter_var, iter_var2, acc_var, acc_init, loop_cond_f, loop_step_f, result_f, kind)
   end
 
+  # Fast path: list range, no iter_var2, collect_list — prepend + reverse, O(n)
+  defp run_comprehension(env, range, _iter_var, nil, _acc_var, _acc_init, _loop_cond_f, _loop_step_f, result_f, {:collect_list, transform_f, filter_f})
+       when is_list(range) do
+    acc =
+      Enum.reduce(range, [], fn v1, acc ->
+        if filter_f == nil or filter_f.(env, v1, nil, acc) != false do
+          [transform_f.(env, v1, nil, acc) | acc]
+        else
+          acc
+        end
+      end)
+
+    result_f.(env, Enum.reverse(acc))
+  end
+
   # Fast path: list range, no iter_var2 — iterate directly without tuple wrapping
   defp run_comprehension(env, range, _iter_var, nil, _acc_var, acc_init, loop_cond_f, loop_step_f, result_f, :standard)
        when is_list(range) do
@@ -305,6 +320,22 @@ defmodule Celixir.Compiler.Runtime do
       end)
 
     result_f.(env, final_acc)
+  end
+
+  defp run_comprehension_items(env, items, _iter_var, _iter_var2, _acc_var, _acc_init, _loop_cond_f, _loop_step_f, result_f, {:collect_list, transform_f, filter_f}) do
+    acc =
+      Enum.reduce(items, [], fn item, acc ->
+        v1 = item_v1(item)
+        v2 = item_v2(item)
+
+        if filter_f == nil or filter_f.(env, v1, v2, acc) != false do
+          [transform_f.(env, v1, v2, acc) | acc]
+        else
+          acc
+        end
+      end)
+
+    result_f.(env, Enum.reverse(acc))
   end
 
   defp run_comprehension_items(env, items, _iter_var, _iter_var2, _acc_var, acc_init, _loop_cond_f, _loop_step_f, result_f, {:transform_map, transform_f, filter_f}) do
