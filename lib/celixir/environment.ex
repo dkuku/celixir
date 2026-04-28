@@ -64,7 +64,8 @@ defmodule Celixir.Environment do
 
   @doc "Creates an environment with the given variable bindings."
   def new(variables) when is_map(variables) do
-    %__MODULE__{variables: stringify_keys(variables)}
+    # Fast path: if all keys are already strings, skip stringify_keys
+    %__MODULE__{variables: maybe_stringify_keys(variables)}
   end
 
   @doc "Adds a variable binding."
@@ -77,6 +78,11 @@ defmodule Celixir.Environment do
     %{env | locals: Map.put(env.locals, to_string(name), value)}
   end
 
+  @doc "Adds multiple local variable bindings at once (single struct copy instead of N copies)."
+  def put_locals_bulk(%__MODULE__{} = env, new_locals) when is_map(new_locals) do
+    %{env | locals: Map.merge(env.locals, new_locals)}
+  end
+
   @doc "Sets the container (namespace) for identifier resolution."
   def set_container(%__MODULE__{} = env, container) do
     %{env | container: container, container_prefixes: compute_container_prefixes(container)}
@@ -87,17 +93,18 @@ defmodule Celixir.Environment do
   - Absolute names (`.y`) bypass locals and container, look up in outer variables only
   - Local names check locals first (comprehension iter vars, cel.bind), then container-resolved outer vars
   """
+  def get_variable(%__MODULE__{} = env, "." <> rest = _name) do
+    # Absolute: bypass locals and container, look up in outer variables only
+    # Strip any additional leading dots
+    bare = String.trim_leading(rest, ".")
+    Map.fetch(env.variables, bare)
+  end
+
   def get_variable(%__MODULE__{} = env, name) do
-    if String.starts_with?(name, ".") do
-      # Absolute: bypass locals and container, look up in outer variables only
-      bare = String.trim_leading(name, ".")
-      Map.fetch(env.variables, bare)
-    else
-      # Check local scope first (comprehension/bind vars shadow everything)
-      case Map.fetch(env.locals, name) do
-        {:ok, _} = ok -> ok
-        :error -> resolve_with_container(env, name)
-      end
+    # Common case: check locals first, then variables (no starts_with? overhead)
+    case Map.fetch(env.locals, name) do
+      {:ok, _} = ok -> ok
+      :error -> resolve_with_container(env, name)
     end
   end
 
@@ -184,6 +191,17 @@ defmodule Celixir.Environment do
   @doc "Sets a custom type adapter module."
   def set_type_adapter(%__MODULE__{} = env, adapter) when is_atom(adapter) do
     %{env | type_adapter: adapter}
+  end
+
+  defp maybe_stringify_keys(map) when map_size(map) == 0, do: %{}
+
+  defp maybe_stringify_keys(map) do
+    # Check the first key — if it's already a string, assume all are (common case).
+    # This avoids iterating the whole map just to convert keys.
+    case :maps.next(:maps.iterator(map)) do
+      {k, _v, _rest} when is_binary(k) -> map
+      _ -> stringify_keys(map)
+    end
   end
 
   defp stringify_keys(map) do

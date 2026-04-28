@@ -25,7 +25,7 @@ defmodule Celixir.Compiler.Runtime do
 
   def lookup(env, name) do
     case Environment.get_variable(env, name) do
-      {:ok, value} -> Celixir.Evaluator.dispatch_normalize(value)
+      {:ok, value} -> normalize_value(value)
       :error ->
         case Map.get(@type_denotations, name) do
           nil -> {:cel_error, "undefined variable: #{name}"}
@@ -33,6 +33,16 @@ defmodule Celixir.Compiler.Runtime do
         end
     end
   end
+
+  # Fast path: primitive types don't need normalization
+  defp normalize_value(v) when is_integer(v), do: v
+  defp normalize_value(v) when is_float(v), do: v
+  defp normalize_value(v) when is_binary(v), do: v
+  defp normalize_value(v) when is_boolean(v), do: v
+  defp normalize_value(nil), do: nil
+  defp normalize_value(v) when is_list(v), do: v
+  defp normalize_value(v) when is_map(v) and not is_struct(v), do: v
+  defp normalize_value(v), do: Celixir.Evaluator.dispatch_normalize(v)
 
   # --- Short-circuit logical ops with CEL error-absorption semantics ---
 
@@ -108,6 +118,53 @@ defmodule Celixir.Compiler.Runtime do
   def cel_mod({:cel_error, _} = e, _), do: e
   def cel_mod(_, {:cel_error, _} = e), do: e
   def cel_mod(a, b), do: Celixir.Evaluator.dispatch_mod(a, b)
+
+  # --- Safe arithmetic (operands guaranteed non-error — skip error checks) ---
+  # Fast-path guards for the most common numeric types to avoid dispatch overhead.
+
+  def safe_add(a, b) when is_integer(a) and is_integer(b), do: a + b
+  def safe_add(a, b) when is_float(a) and is_float(b), do: a + b
+  def safe_add(a, b) when is_binary(a) and is_binary(b), do: a <> b
+  def safe_add(a, b) when is_list(a) and is_list(b), do: a ++ b
+  def safe_add(a, b), do: Celixir.Evaluator.dispatch_add(a, b)
+
+  def safe_sub(a, b) when is_integer(a) and is_integer(b), do: a - b
+  def safe_sub(a, b) when is_float(a) and is_float(b), do: a - b
+  def safe_sub(a, b), do: Celixir.Evaluator.dispatch_sub(a, b)
+
+  def safe_mul(a, b) when is_integer(a) and is_integer(b), do: a * b
+  def safe_mul(a, b) when is_float(a) and is_float(b), do: a * b
+  def safe_mul(a, b), do: Celixir.Evaluator.dispatch_mul(a, b)
+
+  def safe_div(a, b) when is_integer(a) and is_integer(b) and b != 0, do: div(a, b)
+  def safe_div(a, b), do: Celixir.Evaluator.dispatch_div(a, b)
+
+  def safe_mod(a, b) when is_integer(a) and is_integer(b) and b != 0, do: rem(a, b)
+  def safe_mod(a, b), do: Celixir.Evaluator.dispatch_mod(a, b)
+
+  # --- Safe comparison (operands guaranteed non-error) ---
+  # Fast paths for numeric comparisons avoid cel_order/numeric_compare overhead.
+
+  def safe_compare(:lt, a, b) when is_integer(a) and is_integer(b), do: a < b
+  def safe_compare(:lte, a, b) when is_integer(a) and is_integer(b), do: a <= b
+  def safe_compare(:gt, a, b) when is_integer(a) and is_integer(b), do: a > b
+  def safe_compare(:gte, a, b) when is_integer(a) and is_integer(b), do: a >= b
+  def safe_compare(:lt, a, b) when is_float(a) and is_float(b), do: a < b
+  def safe_compare(:lte, a, b) when is_float(a) and is_float(b), do: a <= b
+  def safe_compare(:gt, a, b) when is_float(a) and is_float(b), do: a > b
+  def safe_compare(:gte, a, b) when is_float(a) and is_float(b), do: a >= b
+  def safe_compare(:lt, a, b) when is_binary(a) and is_binary(b), do: a < b
+  def safe_compare(:lte, a, b) when is_binary(a) and is_binary(b), do: a <= b
+  def safe_compare(:gt, a, b) when is_binary(a) and is_binary(b), do: a > b
+  def safe_compare(:gte, a, b) when is_binary(a) and is_binary(b), do: a >= b
+  def safe_compare(op, a, b), do: Celixir.Evaluator.dispatch_compare(op, a, b)
+
+  def safe_equal?(a, b) when is_integer(a) and is_integer(b), do: a == b
+  def safe_equal?(a, b) when is_float(a) and is_float(b), do: a == b
+  def safe_equal?(a, b) when is_binary(a) and is_binary(b), do: a == b
+  def safe_equal?(a, b) when is_boolean(a) and is_boolean(b), do: a == b
+  def safe_equal?(nil, nil), do: true
+  def safe_equal?(a, b), do: Celixir.Evaluator.dispatch_equal?(a, b)
 
   # --- Comparison ---
 
@@ -309,10 +366,35 @@ defmodule Celixir.Compiler.Runtime do
             e
 
           _ ->
-            items = build_iter_items(range, iter_var2)
-            run_comprehension(env, items, iter_var, iter_var2, acc_var, acc_init, loop_cond_f, loop_step_f, result_f, kind)
+            run_comprehension(env, range, iter_var, iter_var2, acc_var, acc_init, loop_cond_f, loop_step_f, result_f, kind)
         end
     end
+  end
+
+  # Fast path: list range, no iter_var2 — iterate the list directly, no tuple wrapping
+  defp run_comprehension(env, range, _iter_var, nil, _acc_var, acc_init, loop_cond_f, loop_step_f, result_f, :standard)
+       when is_list(range) do
+    final_acc =
+      Enum.reduce_while(range, acc_init, fn v1, current_acc ->
+        cond_val = loop_cond_f.(env, v1, nil, current_acc)
+
+        if cond_val == false do
+          {:halt, current_acc}
+        else
+          {:cont, loop_step_f.(env, v1, nil, current_acc)}
+        end
+      end)
+
+    case final_acc do
+      {:cel_error, _} = e -> e
+      _ -> result_f.(env, final_acc)
+    end
+  end
+
+  # General case: build items and iterate
+  defp run_comprehension(env, range, iter_var, iter_var2, acc_var, acc_init, loop_cond_f, loop_step_f, result_f, kind) do
+    items = build_iter_items(range, iter_var2)
+    run_comprehension_items(env, items, iter_var, iter_var2, acc_var, acc_init, loop_cond_f, loop_step_f, result_f, kind)
   end
 
   defp build_iter_items(range, nil) when is_map(range), do: Enum.map(Map.keys(range), &{&1})
@@ -326,28 +408,24 @@ defmodule Celixir.Compiler.Runtime do
     range |> Enum.with_index() |> Enum.map(fn {v, i} -> {i, v} end)
   end
 
-  defp bind_iter_env(env, iter_var, iter_var2, acc_var, acc_val, item) do
-    env
-    |> bind_item(iter_var, iter_var2, item)
-    |> Environment.put_local(acc_var, acc_val)
-  end
+  # Extract v1 and v2 from an iteration item tuple.
+  # Items are {v1} for single-var or {v1, v2} for two-var comprehensions.
+  defp item_v1({v1}), do: v1
+  defp item_v1({v1, _v2}), do: v1
+  defp item_v2({_v1}), do: nil
+  defp item_v2({_v1, v2}), do: v2
 
-  defp bind_item(env, iter_var, nil, {v1}),
-    do: Environment.put_local(env, iter_var, v1)
-
-  defp bind_item(env, iter_var, iter_var2, {v1, v2}),
-    do: env |> Environment.put_local(iter_var, v1) |> Environment.put_local(iter_var2, v2)
-
-  defp run_comprehension(env, items, iter_var, iter_var2, acc_var, acc_init, loop_cond_f, loop_step_f, result_f, :standard) do
+  defp run_comprehension_items(env, items, _iter_var, _iter_var2, _acc_var, acc_init, loop_cond_f, loop_step_f, result_f, :standard) do
     final_acc =
       Enum.reduce_while(items, acc_init, fn item, current_acc ->
-        loop_env = bind_iter_env(env, iter_var, iter_var2, acc_var, current_acc, item)
-        cond_val = loop_cond_f.(loop_env)
+        v1 = item_v1(item)
+        v2 = item_v2(item)
+        cond_val = loop_cond_f.(env, v1, v2, current_acc)
 
         if cond_val == false do
           {:halt, current_acc}
         else
-          {:cont, loop_step_f.(loop_env)}
+          {:cont, loop_step_f.(env, v1, v2, current_acc)}
         end
       end)
 
@@ -356,19 +434,19 @@ defmodule Celixir.Compiler.Runtime do
         e
 
       _ ->
-        result_env = Environment.put_local(env, acc_var, final_acc)
-        result_f.(result_env)
+        result_f.(env, final_acc)
     end
   end
 
-  defp run_comprehension(env, items, iter_var, iter_var2, acc_var, acc_init, _loop_cond_f, _loop_step_f, result_f, {:transform_map, transform_f, filter_f}) do
+  defp run_comprehension_items(env, items, _iter_var, _iter_var2, _acc_var, acc_init, _loop_cond_f, _loop_step_f, result_f, {:transform_map, transform_f, filter_f}) do
     final_acc =
       Enum.reduce_while(items, acc_init, fn {key, _value} = item, current_acc ->
-        loop_env = bind_iter_env(env, iter_var, iter_var2, acc_var, current_acc, item)
+        v1 = item_v1(item)
+        v2 = item_v2(item)
 
         include =
           if filter_f do
-            filter_f.(loop_env)
+            filter_f.(env, v1, v2, current_acc)
           else
             true
           end
@@ -381,7 +459,7 @@ defmodule Celixir.Compiler.Runtime do
             {:cont, current_acc}
 
           _ ->
-            transform_val = transform_f.(loop_env)
+            transform_val = transform_f.(env, v1, v2, current_acc)
 
             case transform_val do
               {:cel_error, _} = e -> {:halt, e}
@@ -395,19 +473,19 @@ defmodule Celixir.Compiler.Runtime do
         e
 
       _ ->
-        result_env = Environment.put_local(env, acc_var, final_acc)
-        result_f.(result_env)
+        result_f.(env, final_acc)
     end
   end
 
-  defp run_comprehension(env, items, iter_var, iter_var2, acc_var, acc_init, _loop_cond_f, _loop_step_f, result_f, {:transform_map_entry, transform_f, filter_f}) do
+  defp run_comprehension_items(env, items, _iter_var, _iter_var2, _acc_var, acc_init, _loop_cond_f, _loop_step_f, result_f, {:transform_map_entry, transform_f, filter_f}) do
     final_acc =
       Enum.reduce_while(items, acc_init, fn item, current_acc ->
-        loop_env = bind_iter_env(env, iter_var, iter_var2, acc_var, current_acc, item)
+        v1 = item_v1(item)
+        v2 = item_v2(item)
 
         include =
           if filter_f do
-            filter_f.(loop_env)
+            filter_f.(env, v1, v2, current_acc)
           else
             true
           end
@@ -420,7 +498,7 @@ defmodule Celixir.Compiler.Runtime do
             {:cont, current_acc}
 
           _ ->
-            transform_val = transform_f.(loop_env)
+            transform_val = transform_f.(env, v1, v2, current_acc)
 
             case transform_val do
               {:cel_error, _} = e ->
@@ -446,16 +524,16 @@ defmodule Celixir.Compiler.Runtime do
         e
 
       _ ->
-        result_env = Environment.put_local(env, acc_var, final_acc)
-        result_f.(result_env)
+        result_f.(env, final_acc)
     end
   end
 
-  defp run_comprehension(env, items, iter_var, iter_var2, acc_var, acc_init, _loop_cond_f, _loop_step_f, result_f, {:sort_by, key_f}) do
+  defp run_comprehension_items(env, items, _iter_var, _iter_var2, _acc_var, acc_init, _loop_cond_f, _loop_step_f, result_f, {:sort_by, key_f}) do
     result =
       Enum.reduce_while(items, [], fn {value} = item, acc ->
-        loop_env = bind_iter_env(env, iter_var, iter_var2, acc_var, acc_init, item)
-        key = key_f.(loop_env)
+        v1 = item_v1(item)
+        v2 = item_v2(item)
+        key = key_f.(env, v1, v2, acc_init)
 
         if match?({:cel_error, _}, key) do
           {:halt, key}
@@ -477,8 +555,7 @@ defmodule Celixir.Compiler.Runtime do
           end)
           |> Enum.map(fn {_, v} -> v end)
 
-        result_env = Environment.put_local(env, acc_var, sorted)
-        result_f.(result_env)
+        result_f.(env, sorted)
     end
   end
 

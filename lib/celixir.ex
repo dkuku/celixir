@@ -297,6 +297,12 @@ defmodule Celixir do
   end
 
   @doc false
+  # Fast paths for primitive types — skip struct/list/map checks
+  def unwrap(v) when is_integer(v), do: v
+  def unwrap(v) when is_float(v), do: v
+  def unwrap(v) when is_binary(v), do: v
+  def unwrap(v) when is_boolean(v), do: v
+  def unwrap(nil), do: nil
   def unwrap(%Optional{has_value: true, value: v}), do: {:optional, unwrap(v)}
   def unwrap(%Optional{has_value: false}), do: :optional_none
   def unwrap(list) when is_list(list), do: Enum.map(list, &unwrap/1)
