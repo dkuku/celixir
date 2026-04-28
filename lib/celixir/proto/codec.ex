@@ -66,7 +66,7 @@ if Code.ensure_loaded?(Protobuf) do
                {:cel_struct, "google.protobuf.Any",
                 %{
                   "type_url" => "type.googleapis.com/#{fq_name}",
-                  "value" => {:cel_bytes, binary}
+                  "value" => binary
                 }}}
 
             error ->
@@ -88,11 +88,7 @@ if Code.ensure_loaded?(Protobuf) do
     Unpack a google.protobuf.Any to its contained CEL struct.
     """
     def unpack(%{"type_url" => type_url, "value" => value}) when is_binary(type_url) do
-      binary =
-        case value do
-          {:cel_bytes, b} -> b
-          b when is_binary(b) -> b
-        end
+      binary = if is_binary(value), do: value, else: ""
 
       decode(type_url, binary)
     end
@@ -197,9 +193,7 @@ if Code.ensure_loaded?(Protobuf) do
     end
 
     # Check if a CEL value is the zero/default for a proto field
-    defp cel_zero_value?({:cel_int, 0}, _fp), do: true
-    defp cel_zero_value?({:cel_uint, 0}, _fp), do: true
-    defp cel_zero_value?({:cel_bytes, ""}, _fp), do: true
+    defp cel_zero_value?(0, _fp), do: true
     defp cel_zero_value?(v, _fp) when is_float(v) and v == 0.0, do: true
     defp cel_zero_value?(false, _fp), do: true
     defp cel_zero_value?("", fp), do: fp.type == :string
@@ -215,10 +209,6 @@ if Code.ensure_loaded?(Protobuf) do
     end
 
     defp cel_zero_value?(_, _), do: false
-
-    defp cel_value_to_proto({:cel_int, v}, _fp), do: v
-    defp cel_value_to_proto({:cel_uint, v}, _fp), do: v
-    defp cel_value_to_proto({:cel_bytes, v}, _fp), do: v
 
     defp cel_value_to_proto({:cel_struct, _type, fields}, fp) when not is_nil(fp),
       do: cel_fields_to_proto_struct(fp.type, fields)
@@ -280,7 +270,7 @@ if Code.ensure_loaded?(Protobuf) do
         fp.type in [:int32, :int64, :sint32, :sint64, :sfixed32, :sfixed64] -> value
         fp.type in [:uint32, :uint64, :fixed32, :fixed64] -> value
         fp.type in [:float, :double] -> value * 1.0
-        fp.type == :bytes -> {:cel_bytes, value}
+        fp.type == :bytes -> value
         fp.repeated? -> Enum.map(value, &proto_value_to_cel(&1, %{fp | repeated?: false}))
         is_atom(fp.type) -> value
         true -> value

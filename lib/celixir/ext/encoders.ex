@@ -33,11 +33,11 @@ defmodule Celixir.Ext.Encoders do
   def decode(s) when is_binary(s) do
     case Base.decode64(s) do
       {:ok, bytes} ->
-        {:cel_bytes, bytes}
+        bytes
 
       :error ->
         case Base.decode64(s, padding: false) do
-          {:ok, bytes} -> {:cel_bytes, bytes}
+          {:ok, bytes} -> bytes
           :error -> raise "base64 decode error: invalid base64 string"
         end
     end

@@ -296,9 +296,6 @@ defmodule Celixir do
   end
 
   @doc false
-  def unwrap({:cel_int, v}), do: v
-  def unwrap({:cel_uint, v}), do: v
-  def unwrap({:cel_bytes, v}), do: v
   def unwrap(%Optional{has_value: true, value: v}), do: {:optional, unwrap(v)}
   def unwrap(%Optional{has_value: false}), do: :optional_none
   def unwrap(list) when is_list(list), do: Enum.map(list, &unwrap/1)
@@ -310,27 +307,26 @@ defmodule Celixir do
   def unwrap(v), do: v
 
   @doc """
-  Encodes a plain Elixir value into CEL internal representation.
+  Encodes a plain Elixir value into CEL representation.
 
-  This is the inverse of `unwrap/1`. Since unwrapping loses some type
-  information (e.g., both `cel_int` and `cel_uint` unwrap to plain integers),
-  `encode` uses sensible defaults: integers become `{:cel_int, v}`.
+  This is the inverse of `unwrap/1`. Since CEL types are now native Elixir
+  types, this is mostly an identity function — integers, strings, floats,
+  booleans, lists, and maps pass through unchanged.
 
   ## Examples
 
       iex> Celixir.encode(42)
-      {:cel_int, 42}
+      42
 
       iex> Celixir.encode("hello")
       "hello"
 
       iex> Celixir.encode([1, 2, 3])
-      [{:cel_int, 1}, {:cel_int, 2}, {:cel_int, 3}]
+      [1, 2, 3]
 
       iex> Celixir.encode(:optional_none)
       %Celixir.Types.Optional{has_value: false}
   """
-  def encode(v) when is_integer(v), do: {:cel_int, v}
   def encode({:optional, v}), do: %Optional{has_value: true, value: encode(v)}
   def encode(:optional_none), do: %Optional{has_value: false}
   def encode(list) when is_list(list), do: Enum.map(list, &encode/1)
@@ -342,18 +338,18 @@ defmodule Celixir do
   def encode(v), do: v
 
   @doc """
-  Encodes an integer as a CEL unsigned integer.
+  Encodes an integer as a CEL unsigned integer (identity — no wrapper now).
 
       iex> Celixir.encode_uint(42)
-      {:cel_uint, 42}
+      42
   """
-  def encode_uint(v) when is_integer(v) and v >= 0, do: {:cel_uint, v}
+  def encode_uint(v) when is_integer(v) and v >= 0, do: v
 
   @doc """
-  Encodes a binary as CEL bytes.
+  Encodes a binary as CEL bytes (identity — bytes are plain binaries now).
 
       iex> Celixir.encode_bytes(<<1, 2, 3>>)
-      {:cel_bytes, <<1, 2, 3>>}
+      <<1, 2, 3>>
   """
-  def encode_bytes(v) when is_binary(v), do: {:cel_bytes, v}
+  def encode_bytes(v) when is_binary(v), do: v
 end

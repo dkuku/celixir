@@ -15,14 +15,14 @@ defmodule Celixir.Proto do
   # Well-known protobuf wrapper types → unwrap to native CEL value
   @wrapper_defaults %{
     "google.protobuf.BoolValue" => false,
-    "google.protobuf.BytesValue" => {:cel_bytes, ""},
+    "google.protobuf.BytesValue" => "",
     "google.protobuf.DoubleValue" => 0.0,
     "google.protobuf.FloatValue" => 0.0,
-    "google.protobuf.Int32Value" => {:cel_int, 0},
-    "google.protobuf.Int64Value" => {:cel_int, 0},
+    "google.protobuf.Int32Value" => 0,
+    "google.protobuf.Int64Value" => 0,
     "google.protobuf.StringValue" => "",
-    "google.protobuf.UInt32Value" => {:cel_uint, 0},
-    "google.protobuf.UInt64Value" => {:cel_uint, 0}
+    "google.protobuf.UInt32Value" => 0,
+    "google.protobuf.UInt64Value" => 0
   }
 
   @wrapper_range_checks %{
@@ -92,15 +92,15 @@ defmodule Celixir.Proto do
     case Map.get(@wrapper_range_checks, type_name) do
       :int32 ->
         case value do
-          {:cel_int, v} when v >= @int32_min and v <= @int32_max -> value
-          {:cel_int, _} -> {:cel_error, "int32 overflow"}
+          v when is_integer(v) and v >= @int32_min and v <= @int32_max -> value
+          v when is_integer(v) -> {:cel_error, "int32 overflow"}
           _ -> value
         end
 
       :uint32 ->
         case value do
-          {:cel_uint, v} when v >= 0 and v <= @uint32_max -> value
-          {:cel_uint, _} -> {:cel_error, "uint32 overflow"}
+          v when is_integer(v) and v >= 0 and v <= @uint32_max -> value
+          v when is_integer(v) -> {:cel_error, "uint32 overflow"}
           _ -> value
         end
 
@@ -224,32 +224,23 @@ defmodule Celixir.Proto do
        when scalar in [:int32, :int64, :uint32, :uint64, :float, :double, :bool, :string, :bytes, :enum],
        do: {:error, "unsupported field type"}
 
-  defp validate_field(:int32, {:cel_int, v}) when v >= @int32_min and v <= @int32_max, do: {:ok, {:cel_int, v}}
-
-  defp validate_field(:int32, {:cel_int, _}), do: {:error, "int32 overflow"}
-  defp validate_field(:int64, {:cel_int, _} = v), do: {:ok, v}
-
-  defp validate_field(:uint32, {:cel_uint, v}) when v >= 0 and v <= @uint32_max, do: {:ok, {:cel_uint, v}}
-
-  defp validate_field(:uint32, {:cel_uint, _}), do: {:error, "uint32 overflow"}
-  defp validate_field(:uint64, {:cel_uint, _} = v), do: {:ok, v}
+  defp validate_field(:int32, v) when is_integer(v) and v >= @int32_min and v <= @int32_max, do: {:ok, v}
+  defp validate_field(:int32, v) when is_integer(v), do: {:error, "int32 overflow"}
+  defp validate_field(:int64, v) when is_integer(v), do: {:ok, v}
+  defp validate_field(:uint32, v) when is_integer(v) and v >= 0 and v <= @uint32_max, do: {:ok, v}
+  defp validate_field(:uint32, v) when is_integer(v), do: {:error, "uint32 overflow"}
+  defp validate_field(:uint64, v) when is_integer(v), do: {:ok, v}
   defp validate_field(:float, v) when is_float(v), do: {:ok, v}
   defp validate_field(:double, v) when is_float(v), do: {:ok, v}
   defp validate_field(:bool, v) when is_boolean(v), do: {:ok, v}
   defp validate_field(:string, v) when is_binary(v), do: {:ok, v}
-  defp validate_field(:bytes, {:cel_bytes, _} = v), do: {:ok, v}
-  defp validate_field(:enum, {:cel_int, v}) when v >= @int32_min and v <= @int32_max, do: {:ok, {:cel_int, v}}
-
-  defp validate_field(:enum, {:cel_int, _}), do: {:error, "enum value out of range"}
-
-  defp validate_field({:wrapper, :int32}, {:cel_int, v}) when v >= @int32_min and v <= @int32_max,
-    do: {:ok, {:cel_int, v}}
-
-  defp validate_field({:wrapper, :int32}, {:cel_int, _}), do: {:error, "int32 overflow"}
-
-  defp validate_field({:wrapper, :uint32}, {:cel_uint, v}) when v >= 0 and v <= @uint32_max, do: {:ok, {:cel_uint, v}}
-
-  defp validate_field({:wrapper, :uint32}, {:cel_uint, _}), do: {:error, "uint32 overflow"}
+  defp validate_field(:bytes, v) when is_binary(v), do: {:ok, v}
+  defp validate_field(:enum, v) when is_integer(v) and v >= @int32_min and v <= @int32_max, do: {:ok, v}
+  defp validate_field(:enum, v) when is_integer(v), do: {:error, "enum value out of range"}
+  defp validate_field({:wrapper, :int32}, v) when is_integer(v) and v >= @int32_min and v <= @int32_max, do: {:ok, v}
+  defp validate_field({:wrapper, :int32}, v) when is_integer(v), do: {:error, "int32 overflow"}
+  defp validate_field({:wrapper, :uint32}, v) when is_integer(v) and v >= 0 and v <= @uint32_max, do: {:ok, v}
+  defp validate_field({:wrapper, :uint32}, v) when is_integer(v), do: {:error, "uint32 overflow"}
 
   defp validate_field({:wrapper, :float}, v) when is_float(v) do
     abs_v = abs(v)
@@ -373,23 +364,15 @@ defmodule Celixir.Proto do
 
   def coerce_to_value({:cel_struct, "google.protobuf.Empty", _}), do: %{}
 
-  def coerce_to_value({:cel_int, v}) when v > @json_safe_int_min and v < @json_safe_int_max, do: v / 1
-
-  def coerce_to_value({:cel_int, v}), do: Integer.to_string(v)
-
-  def coerce_to_value({:cel_uint, v}) when v < @json_safe_int_max, do: v / 1
-  def coerce_to_value({:cel_uint, v}), do: Integer.to_string(v)
-
-  def coerce_to_value({:cel_bytes, bytes}), do: Base.encode64(bytes)
-
+  def coerce_to_value(v) when is_integer(v) and v > @json_safe_int_min and v < @json_safe_int_max, do: v / 1
+  def coerce_to_value(v) when is_integer(v), do: Integer.to_string(v)
   def coerce_to_value(v), do: v
 
   @doc "Wrap a CEL value as a google.protobuf.Value proto representation."
   def wrap_as_proto_value(nil), do: %{"null_value" => 0}
   def wrap_as_proto_value(v) when is_boolean(v), do: %{"bool_value" => v}
   def wrap_as_proto_value(v) when is_float(v), do: %{"number_value" => v}
-  def wrap_as_proto_value({:cel_int, v}), do: %{"number_value" => v / 1}
-  def wrap_as_proto_value({:cel_uint, v}), do: %{"number_value" => v / 1}
+  def wrap_as_proto_value(v) when is_integer(v), do: %{"number_value" => v / 1}
   def wrap_as_proto_value(v) when is_binary(v), do: %{"string_value" => v}
 
   def wrap_as_proto_value(v) when is_list(v) do
@@ -411,16 +394,16 @@ defmodule Celixir.Proto do
   defp prune_nulls?(_), do: false
 
   @doc "Get the default value for a proto field type."
-  def field_default(:int32), do: {:cel_int, 0}
-  def field_default(:int64), do: {:cel_int, 0}
-  def field_default(:uint32), do: {:cel_uint, 0}
-  def field_default(:uint64), do: {:cel_uint, 0}
+  def field_default(:int32), do: 0
+  def field_default(:int64), do: 0
+  def field_default(:uint32), do: 0
+  def field_default(:uint64), do: 0
   def field_default(:float), do: 0.0
   def field_default(:double), do: 0.0
   def field_default(:bool), do: false
   def field_default(:string), do: ""
-  def field_default(:bytes), do: {:cel_bytes, ""}
-  def field_default(:enum), do: {:cel_int, 0}
+  def field_default(:bytes), do: ""
+  def field_default(:enum), do: 0
   def field_default({:wrapper, _}), do: nil
   def field_default({:message, "google.protobuf.ListValue"}), do: []
   def field_default({:message, "google.protobuf.Struct"}), do: %{}

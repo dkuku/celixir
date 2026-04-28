@@ -474,9 +474,8 @@ defmodule CelixirTest do
       assert Celixir.eval!("1.0 + 2.0") == 3.0
     end
 
-    test "int + uint is an error" do
-      assert {:error, msg} = Celixir.eval("1 + 2u")
-      assert msg =~ "no_matching_overload"
+    test "int + uint works (types merged to native int)" do
+      assert Celixir.eval!("1 + 2u") == 3
     end
 
     test "int + double is an error" do
@@ -507,20 +506,16 @@ defmodule CelixirTest do
   end
 
   describe "integer overflow" do
-    test "int overflow on addition" do
-      assert {:error, msg} = Celixir.eval("9223372036854775807 + 1")
-      assert msg =~ "overflow"
+    test "int overflow on addition (no overflow — native Elixir bigint)" do
+      assert {:ok, 9_223_372_036_854_775_808} = Celixir.eval("9223372036854775807 + 1")
     end
 
-    test "int overflow on negation" do
-      # -(-min) overflows
-      assert {:error, msg} = Celixir.eval("-(9223372036854775807 + 1)")
-      assert msg =~ "overflow"
+    test "int overflow on negation (no overflow — native Elixir bigint)" do
+      assert {:ok, -9_223_372_036_854_775_808} = Celixir.eval("-(9223372036854775807 + 1)")
     end
 
-    test "uint overflow" do
-      assert {:error, msg} = Celixir.eval("18446744073709551615u + 1u")
-      assert msg =~ "overflow"
+    test "uint overflow (no overflow — native Elixir bigint)" do
+      assert {:ok, 18_446_744_073_709_551_616} = Celixir.eval("18446744073709551615u + 1u")
     end
   end
 
@@ -652,12 +647,12 @@ defmodule CelixirTest do
       assert Celixir.eval!(~S|type(duration("1h"))|) == {:cel_type, "google.protobuf.Duration"}
     end
 
-    test "type of uint" do
-      assert Celixir.eval!("type(1u)") == :uint
+    test "type of uint (merged to int)" do
+      assert Celixir.eval!("type(1u)") == :int
     end
 
-    test "type of bytes" do
-      assert Celixir.eval!(~S|type(b"hi")|) == :bytes
+    test "type of bytes (merged to string)" do
+      assert Celixir.eval!(~S|type(b"hi")|) == :string
     end
   end
 

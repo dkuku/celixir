@@ -13,14 +13,8 @@ defmodule Celixir.Evaluator do
   alias Celixir.Types.Optional
   alias Celixir.Types.Timestamp
 
-  @int64_min -9_223_372_036_854_775_808
   @int64_max 9_223_372_036_854_775_807
   @uint64_max 18_446_744_073_709_551_615
-
-  # Float boundaries for double-to-int/uint conversion (CEL spec uses exclusive bounds)
-  @int64_min_float -9_223_372_036_854_775_808.0
-  @int64_max_plus1_float 9_223_372_036_854_775_808.0
-  @uint64_max_plus1_float 18_446_744_073_709_551_616.0
 
   @spec eval(AST.expr(), Environment.t()) :: {:ok, any()} | {:error, String.t()}
   def eval(expr, env) do
@@ -60,11 +54,11 @@ defmodule Celixir.Evaluator do
   # ===================================================================
 
   # Literals
-  defp do_eval(%AST.IntLit{value: v}, _env), do: {:cel_int, v}
-  defp do_eval(%AST.UintLit{value: v}, _env), do: {:cel_uint, v}
+  defp do_eval(%AST.IntLit{value: v}, _env), do: v
+  defp do_eval(%AST.UintLit{value: v}, _env), do: v
   defp do_eval(%AST.FloatLit{value: v}, _env), do: v
   defp do_eval(%AST.StringLit{value: v}, _env), do: v
-  defp do_eval(%AST.BytesLit{value: v}, _env), do: {:cel_bytes, v}
+  defp do_eval(%AST.BytesLit{value: v}, _env), do: v
   defp do_eval(%AST.BoolLit{value: v}, _env), do: v
   defp do_eval(%AST.NullLit{}, _env), do: nil
 
@@ -144,8 +138,7 @@ defmodule Celixir.Evaluator do
 
   defp do_eval(%AST.UnaryOp{op: :negate, operand: operand}, env) do
     with_value(do_eval(operand, env), fn
-      {:cel_int, v} -> check_int(-v)
-      {:cel_uint, _} -> cel_error("no_matching_overload: negation on uint")
+      v when is_integer(v) -> -v
       v when is_float(v) -> -v
       %Duration{} = d -> Duration.negate(d)
       v -> cel_error("no_matching_overload: - on #{cel_typeof(v)}")
@@ -388,7 +381,7 @@ defmodule Celixir.Evaluator do
   end
 
   defp build_iter_items(range, _var2) when is_list(range) do
-    range |> Enum.with_index() |> Enum.map(fn {v, i} -> {{:cel_int, i}, v} end)
+    range |> Enum.with_index() |> Enum.map(fn {v, i} -> {i, v} end)
   end
 
   defp bind_iter_vars(env, comp, {var1_val}) do
@@ -520,8 +513,6 @@ defmodule Celixir.Evaluator do
   # Eval helpers (not do_eval)
   # ===================================================================
 
-  defp normalize(v) when is_integer(v), do: {:cel_int, v}
-
   defp normalize({:cel_lazy_default, name}) do
     case Proto.get_schema(name) do
       nil -> nil
@@ -551,7 +542,7 @@ defmodule Celixir.Evaluator do
         cond do
           # NullValue.NULL_VALUE is a proto enum constant for null
           qualified == "NullValue.NULL_VALUE" ->
-            {:ok, {:cel_int, 0}}
+            {:ok, 0}
 
           Proto.well_known_type?(qualified) or Proto.get_schema(qualified) != nil ->
             {:ok, {:cel_type, qualified}}
@@ -563,7 +554,7 @@ defmodule Celixir.Evaluator do
           Map.has_key?(@enum_values, prefix) ->
             case get_in(@enum_values, [prefix, field]) do
               nil -> :not_type
-              int_val -> {:ok, {:cel_int, int_val}}
+              int_val -> {:ok, int_val}
             end
 
           true ->
@@ -685,13 +676,7 @@ defmodule Celixir.Evaluator do
   end
 
   defp opt_index(target, idx) when is_list(target) do
-    i =
-      case idx do
-        {:cel_int, v} -> v
-        {:cel_uint, v} -> v
-        v when is_integer(v) -> v
-        _ -> -1
-      end
+    i = if is_integer(idx), do: idx, else: -1
 
     if i >= 0 do
       case Enum.fetch(target, i) do
@@ -790,9 +775,6 @@ defmodule Celixir.Evaluator do
   defp proto3_default_value?(-0.0), do: true
   defp proto3_default_value?(false), do: true
   defp proto3_default_value?(""), do: true
-  defp proto3_default_value?({:cel_bytes, <<>>}), do: true
-  defp proto3_default_value?({:cel_int, 0}), do: true
-  defp proto3_default_value?({:cel_uint, 0}), do: true
   defp proto3_default_value?(v) when is_list(v), do: v == []
   defp proto3_default_value?(v) when is_map(v), do: v == %{}
   defp proto3_default_value?(_), do: false
@@ -829,7 +811,7 @@ defmodule Celixir.Evaluator do
 
   defp do_index(%Optional{has_value: false}, _idx), do: Optional.none()
 
-  defp do_index(target, {:cel_int, idx}) when is_list(target) do
+  defp do_index(target, idx) when is_list(target) and is_integer(idx) do
     if idx >= 0 do
       case Enum.fetch(target, idx) do
         {:ok, val} -> normalize(val)
@@ -840,37 +822,23 @@ defmodule Celixir.Evaluator do
     end
   end
 
-  defp do_index(target, idx) when is_list(target) and is_integer(idx), do: do_index(target, {:cel_int, idx})
-
-  defp do_index(target, {:cel_uint, idx}) when is_list(target), do: do_index(target, {:cel_int, idx})
-
   defp do_index(target, idx) when is_list(target) and is_float(idx) do
     int_idx = trunc(idx)
 
     if idx == int_idx * 1.0,
-      do: do_index(target, {:cel_int, int_idx}),
+      do: do_index(target, int_idx),
       else: cel_error("invalid_argument: list index must be a whole number, got #{idx}")
   end
 
   defp do_index(target, idx) when is_map(target) do
-    unwrapped =
-      case idx do
-        {:cel_int, v} -> v
-        {:cel_uint, v} -> v
-        other -> other
-      end
-
     cond do
       Map.has_key?(target, idx) ->
         normalize(Map.get(target, idx))
 
-      Map.has_key?(target, unwrapped) ->
-        normalize(Map.get(target, unwrapped))
-
       true ->
         case map_find_key(target, idx) do
           {:ok, matched_key} -> normalize(Map.get(target, matched_key))
-          :error -> cel_error("key #{inspect(unwrapped)} not found in map")
+          :error -> cel_error("key #{inspect(idx)} not found in map")
         end
     end
   end
@@ -936,15 +904,6 @@ defmodule Celixir.Evaluator do
     end
   end
 
-  # Check for cross-type numeric key equivalence (e.g., 0 int == 0u uint)
-  defp has_equivalent_key?({:cel_int, v}, acc) do
-    Map.has_key?(acc, {:cel_uint, v})
-  end
-
-  defp has_equivalent_key?({:cel_uint, v}, acc) do
-    Map.has_key?(acc, {:cel_int, v})
-  end
-
   defp has_equivalent_key?(_, _acc), do: false
 
   # Struct field evaluation — evaluates entries then finalizes via Proto module
@@ -987,11 +946,9 @@ defmodule Celixir.Evaluator do
   # Arithmetic operations with strict types
   # ===================================================================
 
-  defp do_add({:cel_int, a}, {:cel_int, b}), do: check_int(a + b)
-  defp do_add({:cel_uint, a}, {:cel_uint, b}), do: check_uint(a + b)
+  defp do_add(a, b) when is_integer(a) and is_integer(b), do: a + b
   defp do_add(a, b) when is_float(a) and is_float(b), do: a + b
   defp do_add(a, b) when is_binary(a) and is_binary(b), do: a <> b
-  defp do_add({:cel_bytes, a}, {:cel_bytes, b}), do: {:cel_bytes, a <> b}
   defp do_add(a, b) when is_list(a) and is_list(b), do: a ++ b
 
   defp do_add(%Timestamp{} = t, %Duration{} = d) do
@@ -1013,8 +970,7 @@ defmodule Celixir.Evaluator do
 
   defp do_add(l, r), do: cel_error("no_matching_overload: + on #{cel_typeof(l)} and #{cel_typeof(r)}")
 
-  defp do_sub({:cel_int, a}, {:cel_int, b}), do: check_int(a - b)
-  defp do_sub({:cel_uint, a}, {:cel_uint, b}), do: check_uint(a - b)
+  defp do_sub(a, b) when is_integer(a) and is_integer(b), do: a - b
   defp do_sub(a, b) when is_float(a) and is_float(b), do: a - b
 
   defp do_sub(%Timestamp{} = a, %Timestamp{} = b) do
@@ -1042,8 +998,7 @@ defmodule Celixir.Evaluator do
 
   defp do_sub(l, r), do: cel_error("no_matching_overload: - on #{cel_typeof(l)} and #{cel_typeof(r)}")
 
-  defp do_mul({:cel_int, a}, {:cel_int, b}), do: check_int(a * b)
-  defp do_mul({:cel_uint, a}, {:cel_uint, b}), do: check_uint(a * b)
+  defp do_mul(a, b) when is_integer(a) and is_integer(b), do: a * b
 
   defp do_mul(a, b) when is_float(a) and is_float(b) do
     a * b
@@ -1058,10 +1013,8 @@ defmodule Celixir.Evaluator do
 
   defp do_mul(l, r), do: cel_error("no_matching_overload: * on #{cel_typeof(l)} and #{cel_typeof(r)}")
 
-  defp do_div({:cel_int, _}, {:cel_int, 0}), do: cel_error("division by zero")
-  defp do_div({:cel_int, a}, {:cel_int, b}), do: check_int(div(a, b))
-  defp do_div({:cel_uint, _}, {:cel_uint, 0}), do: cel_error("division by zero")
-  defp do_div({:cel_uint, a}, {:cel_uint, b}), do: {:cel_uint, div(a, b)}
+  defp do_div(a, 0) when is_integer(a), do: cel_error("division by zero")
+  defp do_div(a, b) when is_integer(a) and is_integer(b), do: div(a, b)
 
   defp do_div(a, b) when is_float(a) and is_float(b) do
     cond do
@@ -1074,10 +1027,8 @@ defmodule Celixir.Evaluator do
 
   defp do_div(l, r), do: cel_error("no_matching_overload: / on #{cel_typeof(l)} and #{cel_typeof(r)}")
 
-  defp do_mod({:cel_int, _}, {:cel_int, 0}), do: cel_error("modulo by zero")
-  defp do_mod({:cel_int, a}, {:cel_int, b}), do: {:cel_int, rem(a, b)}
-  defp do_mod({:cel_uint, _}, {:cel_uint, 0}), do: cel_error("modulo by zero")
-  defp do_mod({:cel_uint, a}, {:cel_uint, b}), do: {:cel_uint, rem(a, b)}
+  defp do_mod(a, 0) when is_integer(a), do: cel_error("modulo by zero")
+  defp do_mod(a, b) when is_integer(a) and is_integer(b), do: rem(a, b)
 
   defp do_mod(l, r), do: cel_error("no_matching_overload: % on #{cel_typeof(l)} and #{cel_typeof(r)}")
 
@@ -1104,10 +1055,8 @@ defmodule Celixir.Evaluator do
   # --- Cross-type numeric helpers ---
 
   # Extract a raw numeric value or nil for non-numeric types
-  defp to_number({:cel_int, v}), do: v
-  defp to_number({:cel_uint, v}), do: v
-  defp to_number(v) when is_float(v), do: v
   defp to_number(v) when is_integer(v), do: v
+  defp to_number(v) when is_float(v), do: v
   defp to_number(:nan), do: :nan
   defp to_number(:infinity), do: :infinity
   defp to_number(:neg_infinity), do: :neg_infinity
@@ -1125,7 +1074,7 @@ defmodule Celixir.Evaluator do
   defp numeric_compare(:neg_infinity, _), do: :lt
   defp numeric_compare(_, :neg_infinity), do: :gt
 
-  # Both integers (including extracted from cel_int/cel_uint) — exact compare
+  # Both integers — exact compare
   defp numeric_compare(a, b) when is_integer(a) and is_integer(b) do
     cond do
       a < b -> :lt
@@ -1300,9 +1249,6 @@ defmodule Celixir.Evaluator do
       is_boolean(a) and is_boolean(b) ->
         compare_values(a, b)
 
-      match?({:cel_bytes, _}, a) and match?({:cel_bytes, _}, b) ->
-        compare_values(elem(a, 1), elem(b, 1))
-
       match?(%Timestamp{}, a) and match?(%Timestamp{}, b) ->
         compare_values(
           DateTime.to_unix(a.datetime, :microsecond),
@@ -1320,16 +1266,6 @@ defmodule Celixir.Evaluator do
   defp compare_values(a, b) when a < b, do: :lt
   defp compare_values(a, b) when a > b, do: :gt
   defp compare_values(_, _), do: :eq
-
-  # ===================================================================
-  # Overflow checking
-  # ===================================================================
-
-  defp check_int(v) when v >= @int64_min and v <= @int64_max, do: {:cel_int, v}
-  defp check_int(_), do: cel_error("integer overflow")
-
-  defp check_uint(v) when v >= 0 and v <= @uint64_max, do: {:cel_uint, v}
-  defp check_uint(_), do: cel_error("unsigned integer overflow")
 
   @int32_min -2_147_483_648
   @int32_max 2_147_483_647
@@ -1350,9 +1286,8 @@ defmodule Celixir.Evaluator do
 
   # Convert signed int64 to unsigned 64-bit representation
 
-  # Convert unsigned 64-bit back to signed int64
-  defp int64_from_bits(v) when v > @int64_max, do: {:cel_int, v - @uint64_max - 1}
-  defp int64_from_bits(v), do: {:cel_int, v}
+  defp int64_from_bits(v) when v > @int64_max, do: v - @uint64_max - 1
+  defp int64_from_bits(v), do: v
 
   defp cel_lte?(a, b), do: cel_order(a, b) in [:lt, :eq]
 
@@ -1369,12 +1304,11 @@ defmodule Celixir.Evaluator do
 
   defp call_builtin("size", [arg], _env) do
     case arg do
-      s when is_binary(s) -> {:cel_int, String.length(s)}
-      l when is_list(l) -> {:cel_int, length(l)}
-      {:cel_bytes, b} -> {:cel_int, byte_size(b)}
+      s when is_binary(s) -> String.length(s)
+      l when is_list(l) -> length(l)
       %Timestamp{} -> cel_error("no_matching_overload: size() on timestamp")
       %Duration{} -> cel_error("no_matching_overload: size() on duration")
-      m when is_map(m) -> {:cel_int, map_size(m)}
+      m when is_map(m) -> map_size(m)
       _ -> cel_error("no_matching_overload: size() on #{cel_typeof(arg)}")
     end
   end
@@ -1384,20 +1318,14 @@ defmodule Celixir.Evaluator do
       v when is_boolean(v) ->
         :bool
 
-      {:cel_int, _} ->
+      v when is_integer(v) ->
         :int
-
-      {:cel_uint, _} ->
-        :uint
 
       v when is_float(v) ->
         :double
 
       v when is_binary(v) ->
         :string
-
-      {:cel_bytes, _} ->
-        :bytes
 
       v when is_list(v) ->
         :list
@@ -1453,36 +1381,26 @@ defmodule Celixir.Evaluator do
 
   defp call_builtin("int", [arg], _env) do
     case arg do
-      {:cel_int, _} = v ->
+      v when is_integer(v) ->
         v
 
-      {:cel_uint, v} ->
-        check_int(v)
-
       v when is_float(v) ->
-        if v <= @int64_min_float or v >= @int64_max_plus1_float do
-          cel_error("integer overflow")
-        else
-          check_int(trunc(v))
-        end
+        trunc(v)
 
       v when is_binary(v) ->
         case Integer.parse(v) do
-          {n, ""} -> check_int(n)
+          {n, ""} -> n
           _ -> cel_error("cannot convert '#{v}' to int")
         end
 
       true ->
-        {:cel_int, 1}
+        1
 
       false ->
-        {:cel_int, 0}
+        0
 
       %Timestamp{} = t ->
-        {:cel_int, Timestamp.to_unix(t)}
-
-      v when is_integer(v) ->
-        check_int(v)
+        Timestamp.to_unix(t)
 
       _ ->
         cel_error("no_matching_overload: int() on #{cel_typeof(arg)}")
@@ -1491,27 +1409,17 @@ defmodule Celixir.Evaluator do
 
   defp call_builtin("uint", [arg], _env) do
     case arg do
-      {:cel_uint, _} = v ->
+      v when is_integer(v) ->
         v
 
-      {:cel_int, v} ->
-        check_uint(v)
-
       v when is_float(v) ->
-        if v < 0.0 or v >= @uint64_max_plus1_float do
-          cel_error("unsigned integer overflow")
-        else
-          check_uint(trunc(v))
-        end
+        trunc(v)
 
       v when is_binary(v) ->
         case Integer.parse(v) do
-          {n, ""} -> check_uint(n)
+          {n, ""} -> n
           _ -> cel_error("cannot convert '#{v}' to uint")
         end
-
-      v when is_integer(v) ->
-        check_uint(v)
 
       _ ->
         cel_error("no_matching_overload: uint() on #{cel_typeof(arg)}")
@@ -1522,12 +1430,6 @@ defmodule Celixir.Evaluator do
     case arg do
       v when is_float(v) ->
         v
-
-      {:cel_int, v} ->
-        v * 1.0
-
-      {:cel_uint, v} ->
-        v * 1.0
 
       "NaN" ->
         :nan
@@ -1563,10 +1465,7 @@ defmodule Celixir.Evaluator do
       v when is_binary(v) ->
         v
 
-      {:cel_int, v} ->
-        Integer.to_string(v)
-
-      {:cel_uint, v} ->
+      v when is_integer(v) ->
         Integer.to_string(v)
 
       v when is_float(v) ->
@@ -1590,9 +1489,6 @@ defmodule Celixir.Evaluator do
       nil ->
         "null"
 
-      {:cel_bytes, v} ->
-        if String.valid?(v), do: v, else: cel_error("invalid UTF-8 in bytes-to-string conversion")
-
       %Timestamp{} = t ->
         Timestamp.to_string(t)
 
@@ -1615,8 +1511,7 @@ defmodule Celixir.Evaluator do
 
   defp call_builtin("bytes", [arg], _env) do
     case arg do
-      {:cel_bytes, _} = v -> v
-      v when is_binary(v) -> {:cel_bytes, v}
+      v when is_binary(v) -> v
       _ -> cel_error("no_matching_overload: bytes() on #{cel_typeof(arg)}")
     end
   end
@@ -1646,9 +1541,6 @@ defmodule Celixir.Evaluator do
         end
 
       v when is_integer(v) ->
-        check_timestamp(Timestamp.new(DateTime.from_unix!(v)))
-
-      {:cel_int, v} ->
         check_timestamp(Timestamp.new(DateTime.from_unix!(v)))
 
       _ ->
@@ -1701,7 +1593,6 @@ defmodule Celixir.Evaluator do
   end
 
   # Encoding extensions — delegate to Celixir.Ext.Encoders
-  defp call_builtin("base64.encode", [{:cel_bytes, v}], _env), do: Celixir.Ext.Encoders.encode(v)
   defp call_builtin("base64.encode", [v], _env) when is_binary(v), do: Celixir.Ext.Encoders.encode(v)
   defp call_builtin("base64.decode", [v], _env) when is_binary(v), do: Celixir.Ext.Encoders.decode(v)
 
@@ -1718,16 +1609,12 @@ defmodule Celixir.Evaluator do
   defp call_builtin("math.trunc", [v], _env) when is_float(v) or v in [:infinity, :neg_infinity, :nan],
     do: Celixir.Ext.Math.math_trunc(v)
 
-  defp call_builtin("math.abs", [{:cel_int, v}], _env), do: check_int(Celixir.Ext.Math.math_abs(v))
-  defp call_builtin("math.abs", [{:cel_uint, _} = v], _env), do: v
+  defp call_builtin("math.abs", [v], _env) when is_integer(v), do: Celixir.Ext.Math.math_abs(v)
   defp call_builtin("math.abs", [v], _env) when is_float(v) or v in [:infinity, :neg_infinity, :nan],
     do: Celixir.Ext.Math.math_abs(v)
 
-  defp call_builtin("math.sign", [{:cel_int, v}], _env),
-    do: {:cel_int, Celixir.Ext.Math.math_sign(v)}
-
-  defp call_builtin("math.sign", [{:cel_uint, v}], _env),
-    do: {:cel_uint, if(v > 0, do: 1, else: 0)}
+  defp call_builtin("math.sign", [v], _env) when is_integer(v),
+    do: Celixir.Ext.Math.math_sign(v)
 
   defp call_builtin("math.sign", [v], _env) when is_float(v),
     do: Celixir.Ext.Math.math_sign(v)
@@ -1742,57 +1629,38 @@ defmodule Celixir.Evaluator do
     do: Celixir.Ext.Math.math_is_finite(v)
 
   # Math bit operations — delegate to Celixir.Ext.Math
-  defp call_builtin("math.bitAnd", [{:cel_int, a}, {:cel_int, b}], _env),
-    do: {:cel_int, Celixir.Ext.Math.math_bit_and(a, b)}
+  defp call_builtin("math.bitAnd", [a, b], _env) when is_integer(a) and is_integer(b),
+    do: Celixir.Ext.Math.math_bit_and(a, b)
 
-  defp call_builtin("math.bitAnd", [{:cel_uint, a}, {:cel_uint, b}], _env),
-    do: {:cel_uint, Celixir.Ext.Math.math_bit_and(a, b)}
+  defp call_builtin("math.bitOr", [a, b], _env) when is_integer(a) and is_integer(b),
+    do: Celixir.Ext.Math.math_bit_or(a, b)
 
-  defp call_builtin("math.bitOr", [{:cel_int, a}, {:cel_int, b}], _env),
-    do: {:cel_int, Celixir.Ext.Math.math_bit_or(a, b)}
+  defp call_builtin("math.bitXor", [a, b], _env) when is_integer(a) and is_integer(b),
+    do: Celixir.Ext.Math.math_bit_xor(a, b)
 
-  defp call_builtin("math.bitOr", [{:cel_uint, a}, {:cel_uint, b}], _env),
-    do: {:cel_uint, Celixir.Ext.Math.math_bit_or(a, b)}
+  defp call_builtin("math.bitNot", [a], _env) when is_integer(a),
+    do: Celixir.Ext.Math.math_bit_not(a)
 
-  defp call_builtin("math.bitXor", [{:cel_int, a}, {:cel_int, b}], _env),
-    do: {:cel_int, Celixir.Ext.Math.math_bit_xor(a, b)}
-
-  defp call_builtin("math.bitXor", [{:cel_uint, a}, {:cel_uint, b}], _env),
-    do: {:cel_uint, Celixir.Ext.Math.math_bit_xor(a, b)}
-
-  defp call_builtin("math.bitNot", [{:cel_int, a}], _env),
-    do: {:cel_int, Celixir.Ext.Math.math_bit_not(a)}
-
-  defp call_builtin("math.bitNot", [{:cel_uint, a}], _env),
-    do: check_uint(Celixir.Ext.Math.math_bit_not_uint(a))
-
-  defp call_builtin("math.bitShiftLeft", [{:cel_uint, _}, {:cel_int, b}], _env) when b < 0,
+  defp call_builtin("math.bitShiftLeft", [_a, b], _env) when is_integer(b) and b < 0,
     do: cel_error("math.bitShiftLeft: negative shift")
 
-  defp call_builtin("math.bitShiftLeft", [{:cel_int, a}, {:cel_int, b}], _env),
+  defp call_builtin("math.bitShiftLeft", [a, b], _env) when is_integer(a) and is_integer(b),
     do: int64_from_bits(Celixir.Ext.Math.math_bit_shift_left(a, b))
 
-  defp call_builtin("math.bitShiftLeft", [{:cel_uint, a}, {:cel_int, b}], _env),
-    do: {:cel_uint, Celixir.Ext.Math.math_bit_shift_left(a, b)}
-
-  defp call_builtin("math.bitShiftRight", [{:cel_uint, _}, {:cel_int, b}], _env) when b < 0,
+  defp call_builtin("math.bitShiftRight", [_a, b], _env) when is_integer(b) and b < 0,
     do: cel_error("math.bitShiftRight: negative shift")
 
-  defp call_builtin("math.bitShiftRight", [{:cel_int, a}, {:cel_int, b}], _env),
+  defp call_builtin("math.bitShiftRight", [a, b], _env) when is_integer(a) and is_integer(b),
     do: int64_from_bits(Celixir.Ext.Math.math_bit_shift_right(a, b))
 
-  defp call_builtin("math.bitShiftRight", [{:cel_uint, a}, {:cel_int, b}], _env),
-    do: {:cel_uint, Celixir.Ext.Math.math_bit_shift_right(a, b)}
-
-  defp call_builtin("math.sqrt", [{:cel_int, v}], _env), do: Celixir.Ext.Math.math_sqrt(v)
-  defp call_builtin("math.sqrt", [{:cel_uint, v}], _env), do: Celixir.Ext.Math.math_sqrt(v)
+  defp call_builtin("math.sqrt", [v], _env) when is_integer(v), do: Celixir.Ext.Math.math_sqrt(v)
 
   defp call_builtin("math.sqrt", [v], _env) when is_float(v) or v in [:nan, :infinity, :neg_infinity],
     do: Celixir.Ext.Math.math_sqrt(v)
 
   # Lists extensions — delegate to Celixir.Ext.Lists
-  defp call_builtin("lists.range", [{:cel_int, n}], _env) do
-    Celixir.Ext.Lists.range(n) |> Enum.map(&{:cel_int, &1})
+  defp call_builtin("lists.range", [n], _env) when is_integer(n) do
+    Celixir.Ext.Lists.range(n)
   end
 
   # Sets extensions — keep cel_equal? for cross-type correctness (int/uint/double equality)
@@ -1818,8 +1686,8 @@ defmodule Celixir.Evaluator do
        when is_binary(target) and is_binary(pattern) and is_binary(replacement),
     do: Celixir.Ext.Regex.replace(target, pattern, replacement)
 
-  defp call_builtin("regex.replace", [target, pattern, replacement, {:cel_int, count}], _env)
-       when is_binary(target) and is_binary(pattern) and is_binary(replacement),
+  defp call_builtin("regex.replace", [target, pattern, replacement, count], _env)
+       when is_binary(target) and is_binary(pattern) and is_binary(replacement) and is_integer(count),
     do: Celixir.Ext.Regex.replace(target, pattern, replacement, count)
 
   defp call_builtin("regex.extract", [target, pattern], _env)
@@ -1885,15 +1753,15 @@ defmodule Celixir.Evaluator do
   # In legacy mode, returns the int value directly
   defp call_builtin(name, [arg], _env) when is_map_key(@enum_values, name) do
     case arg do
-      {:cel_int, v} ->
+      v when is_integer(v) ->
         with :ok <- check_enum_int32_range(v) do
-          {:cel_int, v}
+          v
         end
 
       s when is_binary(s) ->
         case get_in(@enum_values, [name, s]) do
           nil -> cel_error("invalid enum value: #{s}")
-          int_val -> {:cel_int, int_val}
+          int_val -> int_val
         end
 
       _ ->
@@ -1933,18 +1801,17 @@ defmodule Celixir.Evaluator do
 
   defp call_method_builtin("size", target, [], _env) do
     case target do
-      s when is_binary(s) -> {:cel_int, String.length(s)}
-      l when is_list(l) -> {:cel_int, length(l)}
-      {:cel_bytes, b} -> {:cel_int, byte_size(b)}
+      s when is_binary(s) -> String.length(s)
+      l when is_list(l) -> length(l)
       %Timestamp{} -> cel_error("no_matching_overload: size() on timestamp")
       %Duration{} -> cel_error("no_matching_overload: size() on duration")
-      m when is_map(m) -> {:cel_int, map_size(m)}
+      m when is_map(m) -> map_size(m)
       _ -> cel_error("no_matching_overload: size() on #{cel_typeof(target)}")
     end
   end
 
   # String extension methods
-  defp call_method_builtin("charAt", target, [{:cel_int, idx}], _env) when is_binary(target) do
+  defp call_method_builtin("charAt", target, [idx], _env) when is_binary(target) and is_integer(idx) do
     len = String.length(target)
 
     cond do
@@ -1956,16 +1823,16 @@ defmodule Celixir.Evaluator do
 
   defp call_method_builtin("indexOf", target, [substr], _env) when is_binary(target) and is_binary(substr) do
     if substr == "" do
-      {:cel_int, 0}
+      0
     else
       case :binary.match(target, substr) do
-        {byte_pos, _len} -> {:cel_int, byte_offset_to_code_point(target, byte_pos)}
-        :nomatch -> {:cel_int, -1}
+        {byte_pos, _len} -> byte_offset_to_code_point(target, byte_pos)
+        :nomatch -> -1
       end
     end
   end
 
-  defp call_method_builtin("indexOf", target, [substr, {:cel_int, offset}], _env) when is_binary(target) and is_binary(substr) do
+  defp call_method_builtin("indexOf", target, [substr, offset], _env) when is_binary(target) and is_binary(substr) and is_integer(offset) do
     len = String.length(target)
 
     cond do
@@ -1973,31 +1840,31 @@ defmodule Celixir.Evaluator do
         cel_error("index out of range: #{offset}")
 
       substr == "" ->
-        {:cel_int, offset}
+        offset
 
       true ->
         sliced = String.slice(target, offset, len)
 
         case :binary.match(sliced, substr) do
-          {byte_pos, _len} -> {:cel_int, byte_offset_to_code_point(sliced, byte_pos) + offset}
-          :nomatch -> {:cel_int, -1}
+          {byte_pos, _len} -> byte_offset_to_code_point(sliced, byte_pos) + offset
+          :nomatch -> -1
         end
     end
   end
 
   defp call_method_builtin("lastIndexOf", target, [substr], _env) when is_binary(target) and is_binary(substr) do
     if substr == "" do
-      {:cel_int, String.length(target)}
+      String.length(target)
     else
       case find_last(target, substr) do
-        nil -> {:cel_int, -1}
-        byte_pos -> {:cel_int, byte_offset_to_code_point(target, byte_pos)}
+        nil -> -1
+        byte_pos -> byte_offset_to_code_point(target, byte_pos)
       end
     end
   end
 
-  defp call_method_builtin("lastIndexOf", target, [substr, {:cel_int, offset}], _env)
-       when is_binary(target) and is_binary(substr) do
+  defp call_method_builtin("lastIndexOf", target, [substr, offset], _env)
+       when is_binary(target) and is_binary(substr) and is_integer(offset) do
     len = String.length(target)
 
     cond do
@@ -2005,20 +1872,18 @@ defmodule Celixir.Evaluator do
         cel_error("index out of range: #{offset}")
 
       substr == "" ->
-        {:cel_int, offset}
+        offset
 
       true ->
-        # Take the portion of the string up to offset + length of substr
-        # so that a match starting at offset is included
         sliced = String.slice(target, 0, offset + String.length(substr))
 
         case find_last(sliced, substr) do
           nil ->
-            {:cel_int, -1}
+            -1
 
           byte_pos ->
             cp_pos = byte_offset_to_code_point(sliced, byte_pos)
-            if cp_pos <= offset, do: {:cel_int, cp_pos}, else: {:cel_int, -1}
+            if cp_pos <= offset, do: cp_pos, else: -1
         end
     end
   end
@@ -2034,8 +1899,8 @@ defmodule Celixir.Evaluator do
   defp call_method_builtin("replace", target, [old, new_str], _env)
        when is_binary(target) and is_binary(old) and is_binary(new_str), do: String.replace(target, old, new_str)
 
-  defp call_method_builtin("replace", target, [old, new_str, {:cel_int, count}], _env)
-       when is_binary(target) and is_binary(old) and is_binary(new_str) do
+  defp call_method_builtin("replace", target, [old, new_str, count], _env)
+       when is_binary(target) and is_binary(old) and is_binary(new_str) and is_integer(count) do
     if count < 0,
       do: String.replace(target, old, new_str),
       else:
@@ -2046,7 +1911,7 @@ defmodule Celixir.Evaluator do
 
   defp call_method_builtin("split", target, [sep], _env) when is_binary(target) and is_binary(sep), do: String.split(target, sep)
 
-  defp call_method_builtin("split", target, [sep, {:cel_int, limit}], _env) when is_binary(target) and is_binary(sep) do
+  defp call_method_builtin("split", target, [sep, limit], _env) when is_binary(target) and is_binary(sep) and is_integer(limit) do
     cond do
       limit < 0 -> String.split(target, sep)
       limit == 0 -> []
@@ -2054,7 +1919,7 @@ defmodule Celixir.Evaluator do
     end
   end
 
-  defp call_method_builtin("substring", target, [{:cel_int, start}], _env) when is_binary(target) do
+  defp call_method_builtin("substring", target, [start], _env) when is_binary(target) and is_integer(start) do
     len = String.length(target)
 
     if start < 0 or start > len do
@@ -2064,7 +1929,7 @@ defmodule Celixir.Evaluator do
     end
   end
 
-  defp call_method_builtin("substring", target, [{:cel_int, start}, {:cel_int, stop}], _env) when is_binary(target) do
+  defp call_method_builtin("substring", target, [start, stop], _env) when is_binary(target) and is_integer(start) and is_integer(stop) do
     len = String.length(target)
 
     cond do
@@ -2102,7 +1967,7 @@ defmodule Celixir.Evaluator do
     Enum.sort(target, &cel_lte?/2)
   end
 
-  defp call_method_builtin("slice", target, [{:cel_int, start}, {:cel_int, count}], _env) when is_list(target) do
+  defp call_method_builtin("slice", target, [start, count], _env) when is_list(target) and is_integer(start) and is_integer(count) do
     Enum.slice(target, start, count)
   end
 
@@ -2110,7 +1975,7 @@ defmodule Celixir.Evaluator do
     List.flatten(target)
   end
 
-  defp call_method_builtin("flatten", target, [{:cel_int, depth}], _env) when is_list(target),
+  defp call_method_builtin("flatten", target, [depth], _env) when is_list(target) and is_integer(depth),
     do: Celixir.Ext.Lists.flatten(target, depth)
 
   defp call_method_builtin("distinct", target, [], _env) when is_list(target),
@@ -2144,17 +2009,17 @@ defmodule Celixir.Evaluator do
         _ -> nil
       end
 
-    {:cel_int, Timestamp.get_component(ts, component, tz)}
+    Timestamp.get_component(ts, component, tz)
   end
 
   # Duration accessor methods
-  defp call_method_builtin("getHours", %Duration{} = d, [], _env), do: {:cel_int, Duration.get_component(d, :hours)}
+  defp call_method_builtin("getHours", %Duration{} = d, [], _env), do: Duration.get_component(d, :hours)
 
-  defp call_method_builtin("getMinutes", %Duration{} = d, [], _env), do: {:cel_int, Duration.get_component(d, :minutes)}
+  defp call_method_builtin("getMinutes", %Duration{} = d, [], _env), do: Duration.get_component(d, :minutes)
 
-  defp call_method_builtin("getSeconds", %Duration{} = d, [], _env), do: {:cel_int, Duration.get_component(d, :seconds)}
+  defp call_method_builtin("getSeconds", %Duration{} = d, [], _env), do: Duration.get_component(d, :seconds)
 
-  defp call_method_builtin("getMilliseconds", %Duration{} = d, [], _env), do: {:cel_int, Duration.get_component(d, :milliseconds)}
+  defp call_method_builtin("getMilliseconds", %Duration{} = d, [], _env), do: Duration.get_component(d, :milliseconds)
 
   # Optional methods
   defp call_method_builtin("hasValue", %Optional{} = opt, [], _env), do: Optional.has_value?(opt)
@@ -2171,7 +2036,7 @@ defmodule Celixir.Evaluator do
 
   defp call_method_builtin("family", {:cel_ip, addr}, [], _env) do
     with {:ok, family} <- ip_family(addr) do
-      {:cel_int, family}
+      family
     end
   end
 
@@ -2206,7 +2071,7 @@ defmodule Celixir.Evaluator do
     {:cel_cidr, masked_addr, prefix}
   end
 
-  defp call_method_builtin("prefixLength", {:cel_cidr, _addr, prefix}, [], _env), do: {:cel_int, prefix}
+  defp call_method_builtin("prefixLength", {:cel_cidr, _addr, prefix}, [], _env), do: prefix
 
   # Protobuf struct field access as method
   defp call_method_builtin(name, target, [], _env) when is_struct(target) do
@@ -2243,9 +2108,6 @@ defmodule Celixir.Evaluator do
   defp cel_typeof({:cel_ip, _}), do: "net.IP"
   defp cel_typeof({:cel_cidr, _, _}), do: "net.CIDR"
   defp cel_typeof({:cel_struct, type_name, _}), do: type_name
-  defp cel_typeof({:cel_int, _}), do: "int"
-  defp cel_typeof({:cel_uint, _}), do: "uint"
-  defp cel_typeof({:cel_bytes, _}), do: "bytes"
   defp cel_typeof(v) when is_boolean(v), do: "bool"
   defp cel_typeof(v) when is_float(v), do: "double"
   defp cel_typeof(v) when is_binary(v), do: "string"
@@ -2279,15 +2141,10 @@ defmodule Celixir.Evaluator do
 
   defp cel_typeof(_), do: "dyn"
 
-  defp unwrap_args(args), do: Enum.map(args, &unwrap_value/1)
+  defp unwrap_args(args), do: args
 
-  defp unwrap_value({:cel_int, v}), do: v
-  defp unwrap_value({:cel_uint, v}), do: v
-  defp unwrap_value({:cel_bytes, v}), do: v
-  defp unwrap_value(v), do: v
-
-  # Re-wrap plain Elixir values returned by custom functions into CEL tagged types.
-  defp wrap_value(v) when is_integer(v), do: {:cel_int, v}
+  # Re-wrap plain Elixir values returned by custom functions (identity — types are native now).
+  defp wrap_value(v) when is_integer(v), do: v
   defp wrap_value(v) when is_float(v), do: v
   defp wrap_value(v) when is_boolean(v), do: v
   defp wrap_value(v) when is_binary(v), do: v
@@ -2418,8 +2275,6 @@ defmodule Celixir.Evaluator do
   defp do_fmt_arg(:d, _p, :nan), do: "NaN"
   defp do_fmt_arg(:d, _p, :infinity), do: "Infinity"
   defp do_fmt_arg(:d, _p, :neg_infinity), do: "-Infinity"
-  defp do_fmt_arg(:d, _p, {:cel_int, v}), do: Integer.to_string(v)
-  defp do_fmt_arg(:d, _p, {:cel_uint, v}), do: Integer.to_string(v)
   defp do_fmt_arg(:d, _p, v) when is_integer(v), do: Integer.to_string(v)
   defp do_fmt_arg(:d, _p, v) when is_float(v), do: Integer.to_string(trunc(v))
 
@@ -2429,8 +2284,6 @@ defmodule Celixir.Evaluator do
   defp do_fmt_arg(:f, _p, :nan), do: "NaN"
   defp do_fmt_arg(:f, _p, :infinity), do: "Infinity"
   defp do_fmt_arg(:f, _p, :neg_infinity), do: "-Infinity"
-  defp do_fmt_arg(:f, p, {:cel_int, v}), do: do_fmt_fixed(v * 1.0, p)
-  defp do_fmt_arg(:f, p, {:cel_uint, v}), do: do_fmt_fixed(v * 1.0, p)
   defp do_fmt_arg(:f, p, v) when is_integer(v), do: do_fmt_fixed(v * 1.0, p)
   defp do_fmt_arg(:f, p, v) when is_float(v), do: do_fmt_fixed(v, p)
 
@@ -2441,19 +2294,14 @@ defmodule Celixir.Evaluator do
   defp do_fmt_arg(:e, _p, :nan), do: "NaN"
   defp do_fmt_arg(:e, _p, :infinity), do: "Infinity"
   defp do_fmt_arg(:e, _p, :neg_infinity), do: "-Infinity"
-  defp do_fmt_arg(:e, p, {:cel_int, v}), do: do_fmt_sci(v * 1.0, p)
-  defp do_fmt_arg(:e, p, {:cel_uint, v}), do: do_fmt_sci(v * 1.0, p)
   defp do_fmt_arg(:e, p, v) when is_integer(v), do: do_fmt_sci(v * 1.0, p)
   defp do_fmt_arg(:e, p, v) when is_float(v), do: do_fmt_sci(v, p)
 
   defp do_fmt_arg(:e, _p, arg),
     do: cel_error("error during formatting: scientific clause can only be used on doubles, was given #{do_fmt_type(arg)}")
 
-  defp do_fmt_arg(:x, _p, {:cel_int, v}), do: v |> Integer.to_string(16) |> String.downcase()
-  defp do_fmt_arg(:x, _p, {:cel_uint, v}), do: v |> Integer.to_string(16) |> String.downcase()
   defp do_fmt_arg(:x, _p, v) when is_integer(v), do: v |> Integer.to_string(16) |> String.downcase()
   defp do_fmt_arg(:x, _p, v) when is_binary(v), do: do_hex_bytes(v, :lower)
-  defp do_fmt_arg(:x, _p, {:cel_bytes, v}), do: do_hex_bytes(v, :lower)
 
   defp do_fmt_arg(:x, _p, arg),
     do:
@@ -2461,13 +2309,8 @@ defmodule Celixir.Evaluator do
         "error during formatting: only integers, byte buffers, and strings can be formatted as hex, was given #{do_fmt_type(arg)}"
       )
 
-  defp do_fmt_arg(:upper_x, _p, {:cel_int, v}), do: v |> Integer.to_string(16) |> String.upcase()
-  defp do_fmt_arg(:upper_x, _p, {:cel_uint, v}), do: v |> Integer.to_string(16) |> String.upcase()
-
   defp do_fmt_arg(:upper_x, _p, v) when is_integer(v), do: v |> Integer.to_string(16) |> String.upcase()
-
   defp do_fmt_arg(:upper_x, _p, v) when is_binary(v), do: do_hex_bytes(v, :upper)
-  defp do_fmt_arg(:upper_x, _p, {:cel_bytes, v}), do: do_hex_bytes(v, :upper)
 
   defp do_fmt_arg(:upper_x, _p, arg),
     do:
@@ -2475,15 +2318,11 @@ defmodule Celixir.Evaluator do
         "error during formatting: only integers, byte buffers, and strings can be formatted as hex, was given #{do_fmt_type(arg)}"
       )
 
-  defp do_fmt_arg(:o, _p, {:cel_int, v}), do: Integer.to_string(v, 8)
-  defp do_fmt_arg(:o, _p, {:cel_uint, v}), do: Integer.to_string(v, 8)
   defp do_fmt_arg(:o, _p, v) when is_integer(v), do: Integer.to_string(v, 8)
 
   defp do_fmt_arg(:o, _p, arg),
     do: cel_error("error during formatting: octal clause can only be used on integers, was given #{do_fmt_type(arg)}")
 
-  defp do_fmt_arg(:b, _p, {:cel_int, v}), do: Integer.to_string(v, 2)
-  defp do_fmt_arg(:b, _p, {:cel_uint, v}), do: Integer.to_string(v, 2)
   defp do_fmt_arg(:b, _p, v) when is_integer(v), do: Integer.to_string(v, 2)
   defp do_fmt_arg(:b, _p, true), do: "1"
   defp do_fmt_arg(:b, _p, false), do: "0"
@@ -2495,8 +2334,6 @@ defmodule Celixir.Evaluator do
       )
 
   defp do_fmt_str(v) when is_binary(v), do: v
-  defp do_fmt_str({:cel_int, v}), do: Integer.to_string(v)
-  defp do_fmt_str({:cel_uint, v}), do: Integer.to_string(v)
   defp do_fmt_str(v) when is_integer(v), do: Integer.to_string(v)
   defp do_fmt_str(true), do: "true"
   defp do_fmt_str(false), do: "false"
@@ -2504,7 +2341,6 @@ defmodule Celixir.Evaluator do
   defp do_fmt_str(:nan), do: "NaN"
   defp do_fmt_str(:infinity), do: "Infinity"
   defp do_fmt_str(:neg_infinity), do: "-Infinity"
-  defp do_fmt_str({:cel_bytes, v}), do: v
   defp do_fmt_str(v) when is_float(v), do: Float.to_string(v)
   defp do_fmt_str(%Timestamp{} = t), do: Timestamp.to_string(t)
   defp do_fmt_str(%Duration{microseconds: us}), do: Integer.to_string(div(us, 1_000_000)) <> "s"
@@ -2585,8 +2421,6 @@ defmodule Celixir.Evaluator do
     end
   end
 
-  defp do_fmt_key_sort({:cel_int, v}), do: {0, v, ""}
-  defp do_fmt_key_sort({:cel_uint, v}), do: {1, v, ""}
   defp do_fmt_key_sort(v) when is_integer(v), do: {0, v, ""}
   defp do_fmt_key_sort(true), do: {3, 1, ""}
   defp do_fmt_key_sort(false), do: {3, 0, ""}

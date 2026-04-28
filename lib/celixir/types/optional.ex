@@ -36,9 +36,6 @@ defmodule Celixir.Types.Optional do
   defp zero_value?(0), do: true
   defp zero_value?(v) when is_float(v) and v == 0.0, do: true
   defp zero_value?(""), do: true
-  defp zero_value?({:cel_int, 0}), do: true
-  defp zero_value?({:cel_uint, 0}), do: true
-  defp zero_value?({:cel_bytes, ""}), do: true
   defp zero_value?(l) when is_list(l) and length(l) == 0, do: true
   defp zero_value?(m) when is_map(m) and map_size(m) == 0, do: true
 

@@ -139,8 +139,6 @@ defmodule Celixir.Ext.Math do
       else: pairs |> Enum.min_by(fn {n, _} -> n end) |> elem(1)
   end
 
-  defp to_comparable({:cel_int, v}), do: v * 1.0
-  defp to_comparable({:cel_uint, v}), do: v * 1.0
   defp to_comparable(v) when is_float(v), do: v
   defp to_comparable(v) when is_integer(v), do: v * 1.0
   defp to_comparable(_), do: nil
