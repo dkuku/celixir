@@ -50,12 +50,12 @@ defmodule Celixir.Environment do
   defstruct variables: %{}, functions: %{}, type_adapter: nil, container: nil, container_prefixes: [], locals: %{}, private: %{}
 
   @type t :: %__MODULE__{
-          variables: %{String.t() => any()},
+          variables: %{atom() => any()},
           functions: %{String.t() => function()},
           type_adapter: module() | nil,
           container: String.t() | nil,
           container_prefixes: [String.t()],
-          locals: %{String.t() => any()},
+          locals: %{atom() => any()},
           private: %{any() => any()}
         }
 
@@ -64,23 +64,23 @@ defmodule Celixir.Environment do
 
   @doc "Creates an environment with the given variable bindings."
   def new(variables) when is_map(variables) do
-    # Fast path: if all keys are already strings, skip stringify_keys
-    %__MODULE__{variables: maybe_stringify_keys(variables)}
+    %__MODULE__{variables: maybe_atomize_keys(variables)}
   end
 
   @doc "Adds a variable binding."
   def put_variable(%__MODULE__{} = env, name, value) do
-    %{env | variables: Map.put(env.variables, to_string(name), value)}
+    %{env | variables: Map.put(env.variables, to_atom(name), value)}
   end
 
   @doc "Adds a local variable binding that shadows container-resolved and outer names."
   def put_local(%__MODULE__{} = env, name, value) do
-    %{env | locals: Map.put(env.locals, to_string(name), value)}
+    %{env | locals: Map.put(env.locals, to_atom(name), value)}
   end
 
   @doc "Adds multiple local variable bindings at once (single struct copy instead of N copies)."
   def put_locals_bulk(%__MODULE__{} = env, new_locals) when is_map(new_locals) do
-    %{env | locals: Map.merge(env.locals, new_locals)}
+    atomized = Map.new(new_locals, fn {k, v} -> {to_atom(k), v} end)
+    %{env | locals: Map.merge(env.locals, atomized)}
   end
 
   @doc "Sets the container (namespace) for identifier resolution."
@@ -93,23 +93,29 @@ defmodule Celixir.Environment do
   - Absolute names (`.y`) bypass locals and container, look up in outer variables only
   - Local names check locals first (comprehension iter vars, cel.bind), then container-resolved outer vars
   """
-  def get_variable(%__MODULE__{} = env, "." <> rest = _name) do
+  def get_variable(%__MODULE__{} = env, "." <> rest) do
     # Absolute: bypass locals and container, look up in outer variables only
-    # Strip any additional leading dots
     bare = String.trim_leading(rest, ".")
-    Map.fetch(env.variables, bare)
+    Map.fetch(env.variables, String.to_atom(bare))
   end
 
-  def get_variable(%__MODULE__{} = env, name) do
-    # Common case: check locals first, then variables (no starts_with? overhead)
+  def get_variable(%__MODULE__{} = env, name) when is_atom(name) do
     case Map.fetch(env.locals, name) do
       {:ok, _} = ok -> ok
       :error -> resolve_with_container(env, name)
     end
   end
 
+  def get_variable(%__MODULE__{} = env, name) when is_binary(name) do
+    atom = String.to_atom(name)
+    case Map.fetch(env.locals, atom) do
+      {:ok, _} = ok -> ok
+      :error -> resolve_with_container(env, atom)
+    end
+  end
+
   @doc "Checks if a variable name is locally bound (e.g., comprehension iter var)."
-  def local?(env, name), do: Map.has_key?(env.locals, to_string(name))
+  def local?(env, name), do: Map.has_key?(env.locals, to_atom(name))
 
   defp resolve_with_container(%{container: nil} = env, name) do
     Map.fetch(env.variables, name)
@@ -117,9 +123,9 @@ defmodule Celixir.Environment do
 
   defp resolve_with_container(env, name) do
     # Try progressively shorter container prefixes: com.example.y, com.y, y
+    name_str = Atom.to_string(name)
     Enum.find_value(env.container_prefixes, fn prefix ->
-      qualified = prefix <> "." <> name
-
+      qualified = String.to_atom(prefix <> "." <> name_str)
       case Map.fetch(env.variables, qualified) do
         {:ok, _} = ok -> ok
         :error -> nil
@@ -193,18 +199,17 @@ defmodule Celixir.Environment do
     %{env | type_adapter: adapter}
   end
 
-  defp maybe_stringify_keys(map) when map_size(map) == 0, do: %{}
+  defp to_atom(name) when is_atom(name), do: name
+  defp to_atom(name), do: String.to_atom(to_string(name))
 
-  defp maybe_stringify_keys(map) do
-    # Check the first key — if it's already a string, assume all are (common case).
-    # This avoids iterating the whole map just to convert keys.
+  defp maybe_atomize_keys(map) when map_size(map) == 0, do: %{}
+
+  defp maybe_atomize_keys(map) do
+    # Fast path: if the first key is already an atom, assume all are (common case
+    # when the caller passes %{x: 5, y: 3} with atom keys).
     case :maps.next(:maps.iterator(map)) do
-      {k, _v, _rest} when is_binary(k) -> map
-      _ -> stringify_keys(map)
+      {k, _v, _rest} when is_atom(k) -> map
+      _ -> Map.new(map, fn {k, v} -> {String.to_atom(to_string(k)), v} end)
     end
-  end
-
-  defp stringify_keys(map) do
-    Map.new(map, fn {k, v} -> {to_string(k), v} end)
   end
 end

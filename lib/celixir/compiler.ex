@@ -89,11 +89,12 @@ defmodule Celixir.Compiler do
   end
 
   defp build_eval_fn(body, free_vars, top_safe) do
-    # Build a map pattern: %{"x" => x, "y" => y, ...}
+    # Build a map pattern: %{x: x, y: y, ...} (atom keys)
     var_pairs =
       Enum.map(free_vars, fn name ->
-        var = Macro.var(String.to_atom(name), __MODULE__)
-        {name, var}
+        atom = String.to_atom(name)
+        var = Macro.var(atom, __MODULE__)
+        {atom, var}
       end)
 
     # Build the map pattern for the variables field
@@ -108,11 +109,12 @@ defmodule Celixir.Compiler do
     # Build the missing-var fallback
     missing_check =
       Enum.reduce(Enum.reverse(free_vars), nil, fn name, acc ->
+        atom = String.to_atom(name)
         if acc == nil do
           quote do: {:error, "undefined variable: #{unquote(name)}"}
         else
           quote do
-            if Map.has_key?(__cel_env__.variables, unquote(name)) do
+            if Map.has_key?(__cel_env__.variables, unquote(atom)) do
               unquote(acc)
             else
               {:error, "undefined variable: #{unquote(name)}"}
@@ -433,7 +435,7 @@ defmodule Celixir.Compiler do
         Macro.var(String.to_atom(name), __MODULE__)
 
       true ->
-        quote do: Celixir.Compiler.Runtime.lookup(__cel_env__, unquote(name))
+        quote do: Celixir.Compiler.Runtime.lookup(__cel_env__, unquote(String.to_atom(name)))
     end
   end
 

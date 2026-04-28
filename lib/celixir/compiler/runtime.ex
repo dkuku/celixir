@@ -8,22 +8,22 @@ defmodule Celixir.Compiler.Runtime do
   alias Celixir.Types.Optional
 
   @type_denotations %{
-    "bool" => :bool,
-    "int" => :int,
-    "uint" => :uint,
-    "double" => :double,
-    "string" => :string,
-    "bytes" => :bytes,
-    "list" => :list,
-    "map" => :map,
-    "type" => :type,
-    "null_type" => :null_type,
-    "optional_type" => :optional_type
+    bool: :bool,
+    int: :int,
+    uint: :uint,
+    double: :double,
+    string: :string,
+    bytes: :bytes,
+    list: :list,
+    map: :map,
+    type: :type,
+    null_type: :null_type,
+    optional_type: :optional_type
   }
 
   # --- Variable resolution ---
 
-  def lookup(env, name) do
+  def lookup(env, name) when is_atom(name) do
     case Environment.get_variable(env, name) do
       {:ok, value} -> normalize_value(value)
       :error ->
