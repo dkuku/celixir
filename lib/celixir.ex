@@ -337,20 +337,4 @@ defmodule Celixir do
   end
 
   def encode(v), do: v
-
-  @doc """
-  Encodes an integer as a CEL unsigned integer (identity — no wrapper now).
-
-      iex> Celixir.encode_uint(42)
-      42
-  """
-  def encode_uint(v) when is_integer(v) and v >= 0, do: v
-
-  @doc """
-  Encodes a binary as CEL bytes (identity — bytes are plain binaries now).
-
-      iex> Celixir.encode_bytes(<<1, 2, 3>>)
-      <<1, 2, 3>>
-  """
-  def encode_bytes(v) when is_binary(v), do: v
 end

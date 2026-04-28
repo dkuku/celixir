@@ -51,20 +51,6 @@ defmodule Celixir.EncodeTest do
     end
   end
 
-  describe "encode_uint/1" do
-    test "unsigned integers pass through" do
-      assert Celixir.encode_uint(42) == 42
-      assert Celixir.encode_uint(0) == 0
-    end
-  end
-
-  describe "encode_bytes/1" do
-    test "bytes pass through" do
-      assert Celixir.encode_bytes(<<1, 2, 3>>) == <<1, 2, 3>>
-      assert Celixir.encode_bytes("hello") == "hello"
-    end
-  end
-
   describe "roundtrip encode/unwrap" do
     test "unwrap(encode(v)) == v for simple values" do
       for val <- [42, "hello", 3.14, true, false, nil] do
