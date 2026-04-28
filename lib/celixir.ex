@@ -119,6 +119,11 @@ defmodule Celixir do
     defexception [:message]
   end
 
+  defmodule EvalError do
+    @moduledoc false
+    defexception [:message]
+  end
+
   @doc """
   Parses and evaluates a CEL expression with optional variable bindings.
 

@@ -50,12 +50,9 @@ defmodule Celixir.Compiler do
     ctx = %{free_vars: MapSet.new(free_vars), bound_vars: MapSet.new(), comp_var_map: %{}}
     body = to_quoted(ast, ctx)
 
-    # Check if the top-level expression is guaranteed error-free (can skip outer case)
-    top_safe = safe?(ast, ctx)
-
     # Build the pattern-matching function head that extracts variables directly
     # from the Environment struct's variables map.
-    eval_fn = build_eval_fn(body, free_vars, top_safe)
+    eval_fn = build_eval_fn(body, free_vars)
 
     Module.create(module_name, eval_fn, __ENV__)
     {:ok, :erlang.make_fun(module_name, :eval, 1)}
@@ -67,28 +64,19 @@ defmodule Celixir.Compiler do
   # Build def eval(...) with pattern-matched variables for efficiency
   # ===================================================================
 
-  defp build_eval_fn(body, [], top_safe) do
-    # No free variables — simple function
-    eval_body =
-      if top_safe do
-        quote do: {:ok, Celixir.unwrap(unquote(body))}
-      else
-        quote do
-          case unquote(body) do
-            {:cel_error, msg} -> {:error, msg}
-            v -> {:ok, Celixir.unwrap(v)}
-          end
-        end
-      end
-
+  defp build_eval_fn(body, []) do
     quote do
       def eval(__cel_env__) do
-        unquote(eval_body)
+        try do
+          {:ok, Celixir.unwrap(unquote(body))}
+        rescue
+          e in Celixir.EvalError -> {:error, e.message}
+        end
       end
     end
   end
 
-  defp build_eval_fn(body, free_vars, top_safe) do
+  defp build_eval_fn(body, free_vars) do
     # Build a map pattern: %{x: x, y: y, ...} (atom keys)
     var_pairs =
       Enum.map(free_vars, fn name ->
@@ -97,16 +85,14 @@ defmodule Celixir.Compiler do
         {atom, var}
       end)
 
-    # Build the map pattern for the variables field
     vars_map_pattern = {:%{}, [], var_pairs}
 
-    # Pattern match on the struct directly — extracts vars in one step
     env_pattern =
       quote do
         %Celixir.Environment{variables: unquote(vars_map_pattern)} = __cel_env__
       end
 
-    # Build the missing-var fallback
+    # Fallback when a free variable is missing from the environment
     missing_check =
       Enum.reduce(Enum.reverse(free_vars), nil, fn name, acc ->
         atom = String.to_atom(name)
@@ -123,21 +109,13 @@ defmodule Celixir.Compiler do
         end
       end)
 
-    eval_body =
-      if top_safe do
-        quote do: {:ok, Celixir.unwrap(unquote(body))}
-      else
-        quote do
-          case unquote(body) do
-            {:cel_error, msg} -> {:error, msg}
-            v -> {:ok, Celixir.unwrap(v)}
-          end
-        end
-      end
-
     quote do
       def eval(unquote(env_pattern)) do
-        unquote(eval_body)
+        try do
+          {:ok, Celixir.unwrap(unquote(body))}
+        rescue
+          e in Celixir.EvalError -> {:error, e.message}
+        end
       end
 
       def eval(__cel_env__) do
@@ -443,14 +421,7 @@ defmodule Celixir.Compiler do
 
   defp to_quoted(%AST.UnaryOp{op: :not, operand: operand}, ctx) do
     o = to_quoted(operand, ctx)
-
-    quote do
-      case unquote(o) do
-        {:cel_error, _} = e -> e
-        v when is_boolean(v) -> not v
-        v -> {:cel_error, "no_matching_overload: ! on #{Celixir.Compiler.Runtime.cel_typeof(v)}"}
-      end
-    end
+    quote do: Celixir.Compiler.Runtime.cel_not(unquote(o))
   end
 
   defp to_quoted(%AST.UnaryOp{op: :negate, operand: operand}, ctx) do
@@ -458,7 +429,6 @@ defmodule Celixir.Compiler do
 
     quote do
       case unquote(o) do
-        {:cel_error, _} = e -> e
         v when is_integer(v) -> -v
         v when is_float(v) -> -v
         v -> Celixir.Compiler.Runtime.negate(v)
@@ -473,21 +443,12 @@ defmodule Celixir.Compiler do
     rq = to_quoted(r, ctx)
 
     if safe?(l, ctx) and safe?(r, ctx) do
-      # Both sides are safe booleans — inline cel_and without closure allocation.
-      # This avoids creating an anonymous function on every evaluation.
+      # Both sides are safe — inline without closure allocation
       quote do
         case unquote(lq) do
-          false ->
-            false
-
-          true ->
-            unquote(rq)
-
-          {:cel_error, _} = __cel_err__ ->
-            if unquote(rq) == false, do: false, else: __cel_err__
-
-          __cel_v__ ->
-            {:cel_error, "no_matching_overload: && on #{Celixir.Compiler.Runtime.cel_typeof(__cel_v__)}"}
+          false -> false
+          true -> unquote(rq)
+          __cel_v__ -> Celixir.Compiler.Runtime.cel_and(__cel_v__, fn -> unquote(rq) end)
         end
       end
     else
@@ -500,20 +461,12 @@ defmodule Celixir.Compiler do
     rq = to_quoted(r, ctx)
 
     if safe?(l, ctx) and safe?(r, ctx) do
-      # Both sides are safe booleans — inline cel_or without closure allocation.
+      # Both sides are safe — inline without closure allocation
       quote do
         case unquote(lq) do
-          true ->
-            true
-
-          false ->
-            unquote(rq)
-
-          {:cel_error, _} = __cel_err__ ->
-            if unquote(rq) == true, do: true, else: __cel_err__
-
-          __cel_v__ ->
-            {:cel_error, "no_matching_overload: || on #{Celixir.Compiler.Runtime.cel_typeof(__cel_v__)}"}
+          true -> true
+          false -> unquote(rq)
+          __cel_v__ -> Celixir.Compiler.Runtime.cel_or(__cel_v__, fn -> unquote(rq) end)
         end
       end
     else
@@ -632,8 +585,7 @@ defmodule Celixir.Compiler do
       case unquote(cq) do
         true -> unquote(tq)
         false -> unquote(fq)
-        {:cel_error, _} = e -> e
-        v -> {:cel_error, "ternary condition must be bool, got #{Celixir.Compiler.Runtime.cel_typeof(v)}"}
+        v -> raise Celixir.EvalError, message: "ternary condition must be bool, got #{Celixir.Compiler.Runtime.cel_typeof(v)}"
       end
     end
   end
@@ -740,20 +692,22 @@ defmodule Celixir.Compiler do
     tq = to_quoted(target, ctx)
     qname = qualified_function_name(target, name)
 
-    if qname do
+    base_name = extract_base_name(target)
+    # Only use the namespace-vs-variable dispatch if the base name is not already
+    # known to be a variable (free_vars = inlined from env, comp_var_map = comprehension arg).
+    is_known_var =
+      MapSet.member?(ctx.free_vars, base_name) or Map.has_key?(ctx.comp_var_map, base_name)
+
+    if qname && not is_known_var do
+      base_atom = String.to_atom(base_name)
       quote do
-        case unquote(tq) do
-          {:cel_error, _} ->
-            case Celixir.Compiler.Runtime.call(__cel_env__, unquote(qname), [unquote_splicing(args_quoted)]) do
-              {:cel_error, "undefined function: " <> _} ->
-                {:cel_error, "undefined variable: #{unquote(extract_base_name(target))}"}
-
-              result ->
-                result
-            end
-
-          target_val ->
-            Celixir.Compiler.Runtime.method(__cel_env__, unquote(name), target_val, [unquote_splicing(args_quoted)])
+        case Celixir.Compiler.Runtime.lookup_opt(__cel_env__, unquote(base_atom)) do
+          :error ->
+            # Base name is not a variable — try as a qualified function call
+            Celixir.Compiler.Runtime.call(__cel_env__, unquote(qname), [unquote_splicing(args_quoted)])
+          {:ok, _} ->
+            # Base name is a variable — evaluate full target and call method
+            Celixir.Compiler.Runtime.method(__cel_env__, unquote(name), unquote(tq), [unquote_splicing(args_quoted)])
         end
       end
     else
