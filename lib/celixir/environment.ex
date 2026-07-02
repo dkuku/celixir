@@ -47,15 +47,21 @@ defmodule Celixir.Environment do
       Celixir.eval!("format.currency(price, 'USD')", env)
   """
 
-  defstruct variables: %{}, functions: %{}, type_adapter: nil, container: nil, container_prefixes: [], locals: %{}, private: %{}
+  defstruct variables: %{},
+            functions: %{},
+            type_adapter: nil,
+            container: nil,
+            container_prefixes: [],
+            locals: %{},
+            private: %{}
 
   @type t :: %__MODULE__{
-          variables: %{atom() => any()},
+          variables: %{String.t() => any()},
           functions: %{String.t() => function()},
           type_adapter: module() | nil,
           container: String.t() | nil,
           container_prefixes: [String.t()],
-          locals: %{atom() => any()},
+          locals: %{String.t() => any()},
           private: %{any() => any()}
         }
 
@@ -64,23 +70,23 @@ defmodule Celixir.Environment do
 
   @doc "Creates an environment with the given variable bindings."
   def new(variables) when is_map(variables) do
-    %__MODULE__{variables: maybe_atomize_keys(variables)}
+    %__MODULE__{variables: normalize_keys(variables)}
   end
 
   @doc "Adds a variable binding."
   def put_variable(%__MODULE__{} = env, name, value) do
-    %{env | variables: Map.put(env.variables, to_atom(name), value)}
+    %{env | variables: Map.put(env.variables, to_string_key(name), value)}
   end
 
   @doc "Adds a local variable binding that shadows container-resolved and outer names."
   def put_local(%__MODULE__{} = env, name, value) do
-    %{env | locals: Map.put(env.locals, to_atom(name), value)}
+    %{env | locals: Map.put(env.locals, to_string_key(name), value)}
   end
 
   @doc "Adds multiple local variable bindings at once (single struct copy instead of N copies)."
   def put_locals_bulk(%__MODULE__{} = env, new_locals) when is_map(new_locals) do
-    atomized = Map.new(new_locals, fn {k, v} -> {to_atom(k), v} end)
-    %{env | locals: Map.merge(env.locals, atomized)}
+    stringified = Map.new(new_locals, fn {k, v} -> {to_string_key(k), v} end)
+    %{env | locals: Map.merge(env.locals, stringified)}
   end
 
   @doc "Sets the container (namespace) for identifier resolution."
@@ -96,26 +102,27 @@ defmodule Celixir.Environment do
   def get_variable(%__MODULE__{} = env, "." <> rest) do
     # Absolute: bypass locals and container, look up in outer variables only
     bare = String.trim_leading(rest, ".")
-    Map.fetch(env.variables, String.to_atom(bare))
+    Map.fetch(env.variables, bare)
   end
 
   def get_variable(%__MODULE__{} = env, name) when is_atom(name) do
+    str = Atom.to_string(name)
+
+    case Map.fetch(env.locals, str) do
+      {:ok, _} = ok -> ok
+      :error -> resolve_with_container(env, str)
+    end
+  end
+
+  def get_variable(%__MODULE__{} = env, name) when is_binary(name) do
     case Map.fetch(env.locals, name) do
       {:ok, _} = ok -> ok
       :error -> resolve_with_container(env, name)
     end
   end
 
-  def get_variable(%__MODULE__{} = env, name) when is_binary(name) do
-    atom = String.to_atom(name)
-    case Map.fetch(env.locals, atom) do
-      {:ok, _} = ok -> ok
-      :error -> resolve_with_container(env, atom)
-    end
-  end
-
   @doc "Checks if a variable name is locally bound (e.g., comprehension iter var)."
-  def local?(env, name), do: Map.has_key?(env.locals, to_atom(name))
+  def local?(env, name), do: Map.has_key?(env.locals, to_string_key(name))
 
   defp resolve_with_container(%{container: nil} = env, name) do
     Map.fetch(env.variables, name)
@@ -123,9 +130,9 @@ defmodule Celixir.Environment do
 
   defp resolve_with_container(env, name) do
     # Try progressively shorter container prefixes: com.example.y, com.y, y
-    name_str = Atom.to_string(name)
     Enum.find_value(env.container_prefixes, fn prefix ->
-      qualified = String.to_atom(prefix <> "." <> name_str)
+      qualified = prefix <> "." <> name
+
       case Map.fetch(env.variables, qualified) do
         {:ok, _} = ok -> ok
         :error -> nil
@@ -199,17 +206,17 @@ defmodule Celixir.Environment do
     %{env | type_adapter: adapter}
   end
 
-  defp to_atom(name) when is_atom(name), do: name
-  defp to_atom(name), do: String.to_atom(to_string(name))
+  defp to_string_key(name) when is_binary(name), do: name
+  defp to_string_key(name) when is_atom(name), do: Atom.to_string(name)
 
-  defp maybe_atomize_keys(map) when map_size(map) == 0, do: %{}
+  defp normalize_keys(map) when map_size(map) == 0, do: %{}
 
-  defp maybe_atomize_keys(map) do
-    # Fast path: if the first key is already an atom, assume all are (common case
-    # when the caller passes %{x: 5, y: 3} with atom keys).
+  defp normalize_keys(map) do
+    # Fast path: if the first key is already a string, assume all are (common case
+    # when the caller passes string-keyed maps from JSON/database).
     case :maps.next(:maps.iterator(map)) do
-      {k, _v, _rest} when is_atom(k) -> map
-      _ -> Map.new(map, fn {k, v} -> {String.to_atom(to_string(k)), v} end)
+      {k, _v, _rest} when is_binary(k) -> map
+      _ -> Map.new(map, fn {k, v} -> {to_string_key(k), v} end)
     end
   end
 end
