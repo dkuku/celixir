@@ -5,6 +5,14 @@ defmodule Celixir.Environment do
 
   ## Building an environment
 
+  Both atom-keyed and string-keyed maps are accepted. String keys are recommended
+  when variable data comes from untrusted sources (JSON, user input, databases)
+  to avoid atom exhaustion.
+
+      # String-keyed (recommended for untrusted data)
+      env = Celixir.Environment.new(%{"severity" => "high", "count" => 3})
+
+      # Atom-keyed (convenient for trusted, developer-defined bindings)
       env = Celixir.Environment.new(%{x: 10, name: "alice"})
 
   ## Registering custom functions

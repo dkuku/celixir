@@ -17,6 +17,12 @@ defmodule Celixir do
       iex> Celixir.eval("x > 10 ? 'big' : 'small'", %{x: 42})
       {:ok, "big"}
 
+  String-keyed maps are supported directly, avoiding atom creation from
+  untrusted input (e.g., JSON from user submissions or databases):
+
+      iex> Celixir.eval("severity == 'high'", %{"severity" => "high"})
+      {:ok, true}
+
   ## Compile Once, Evaluate Many
 
       {:ok, program} = Celixir.compile("x * 2 + y")
@@ -136,6 +142,9 @@ defmodule Celixir do
       {:ok, 3}
 
       iex> Celixir.eval("x > 0", %{x: 5})
+      {:ok, true}
+
+      iex> Celixir.eval("severity == 'high'", %{"severity" => "high"})
       {:ok, true}
 
       iex> Celixir.eval("undefined_var")

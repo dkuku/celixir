@@ -24,6 +24,9 @@ Celixir.eval!("'hello' + ' ' + 'world'")        # => "hello world"
 # Variable bindings
 Celixir.eval!("age >= 18", %{age: 21})          # => true
 
+# String-keyed maps (recommended for untrusted data; no atoms created)
+Celixir.eval!("severity == 'high'", %{"severity" => "high"})  # => true
+
 # Complex expressions
 Celixir.eval!(
   "request.method == 'GET' && resource.public",
