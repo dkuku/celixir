@@ -91,11 +91,56 @@ defmodule Celixir.EnvironmentAtomTest do
     end
   end
 
-  describe "atom keys vs atom values" do
-    test "atom map keys still work for field access (keys not converted)" do
+  describe "atom map keys" do
+    test "atom keys are encoded, so every access path agrees" do
       env = Environment.new(%{user: %{role: :admin}})
-      # role key stays atom internally, value becomes string
+
       assert {:ok, true} = Celixir.eval("user.role == 'admin'", env)
+      assert {:ok, true} = Celixir.eval("user['role'] == 'admin'", env)
+      assert {:ok, true} = Celixir.eval("'role' in user", env)
+      assert {:ok, ["role"]} = Celixir.eval("user.map(k, k)", env)
+    end
+
+    test "non-atom map keys keep their type" do
+      # CEL map keys are int/uint/bool/string; only atoms have no counterpart.
+      env = Environment.new(%{"m" => %{1 => :a, true => :b}})
+      assert {:ok, true} = Celixir.eval("m[1] == 'a'", env)
+      assert {:ok, true} = Celixir.eval("m[true] == 'b'", env)
+    end
+  end
+
+  describe "binding keys that are neither atoms nor strings" do
+    test "integer and charlist keys are stringified" do
+      assert Environment.new(%{1 => 5}).variables == %{"1" => 5}
+      assert Environment.new(%{~c"cl" => 5}).variables == %{"cl" => 5}
+      assert Environment.put_variable(Environment.new(), 1, 5).variables == %{"1" => 5}
+    end
+  end
+
+  describe "comprehensions stay linear" do
+    # Comprehension accumulators grow with each iteration. Encoding one on every
+    # step made map/filter quadratic: 8k items took 373ms against 1ms without.
+    #
+    # n is tuned against measurement, not extrapolation. With the bug present
+    # this eval takes 2.0s at 30k (228ms/911ms/2015ms at 10k/20k/30k); without
+    # it, ~10ms. A 1s timeout sits between them with 100x headroom on the linear
+    # side. Larger n is not better: past ~50k the quadratic case allocates hard
+    # enough to starve ExUnit's timeout, hanging the suite instead of failing.
+    @tag timeout: 1_000
+    test "map over a large list does not degrade quadratically" do
+      items = Enum.to_list(1..30_000)
+      assert {:ok, result} = Celixir.eval("items.map(x, x * 2)", %{"items" => items})
+      assert length(result) == 30_000
+    end
+
+    # The predicate keeps every item on purpose: the cost is driven by how large
+    # the accumulator grows, so a selective filter would stay under the timeout
+    # even with the bug present and guard nothing.
+    @tag timeout: 1_000
+    test "filter over a large list does not degrade quadratically" do
+      items = Enum.to_list(1..30_000)
+      assert {:ok, result} = Celixir.eval("items.filter(x, x > 0)", %{"items" => items})
+      assert length(result) == 30_000
     end
   end
 end
