@@ -334,6 +334,15 @@ defmodule Celixir do
   types, this is mostly an identity function — integers, strings, floats,
   booleans, lists, and maps pass through unchanged.
 
+  Atoms have no CEL counterpart, so they are converted to strings, recursing
+  through lists and through both the keys and values of plain maps. The atoms
+  that do carry CEL meaning are preserved: `nil` is CEL null, `true`/`false`
+  are CEL bool, and `:nan`/`:infinity`/`:neg_infinity` are the double
+  sentinels. Structs are left untouched for the type adapter to handle.
+
+  This is the same encoding `Celixir.Environment` applies to variable
+  bindings, so `encode/1` and `Environment.new/1` agree on every value.
+
   ## Examples
 
       iex> Celixir.encode(42)
@@ -345,11 +354,30 @@ defmodule Celixir do
       iex> Celixir.encode([1, 2, 3])
       [1, 2, 3]
 
+      iex> Celixir.encode(:admin)
+      "admin"
+
+      iex> Celixir.encode(%{role: :admin})
+      %{"role" => "admin"}
+
+      iex> Celixir.encode([nil, true, :nan])
+      [nil, true, :nan]
+
       iex> Celixir.encode(:optional_none)
       %Celixir.Types.Optional{has_value: false}
   """
+
+  # Atoms reserved for CEL semantics — preserved through the boundary.
+  # nil/true/false map to CEL null/bool; the numeric sentinels carry NaN/±Inf.
+  @reserved_atoms [nil, true, false, :nan, :infinity, :neg_infinity]
+
   def encode({:optional, v}), do: %Optional{has_value: true, value: encode(v)}
   def encode(:optional_none), do: %Optional{has_value: false}
+
+  def encode(v) when is_atom(v) do
+    if v in @reserved_atoms, do: v, else: Atom.to_string(v)
+  end
+
   def encode(list) when is_list(list), do: Enum.map(list, &encode/1)
 
   def encode(map) when is_map(map) and not is_struct(map) do

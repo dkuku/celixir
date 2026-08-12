@@ -218,25 +218,10 @@ defmodule Celixir.Environment do
   defp to_string_key(name) when is_atom(name), do: Atom.to_string(name)
   defp to_string_key(name), do: to_string(name)
 
-  # Atoms reserved for CEL semantics — preserved through the boundary.
-  # nil/true/false map to CEL null/bool; the numeric sentinels carry NaN/±Inf.
-  @reserved_atoms [nil, true, false, :nan, :infinity, :neg_infinity]
-
-  # Encode Elixir values for CEL: convert non-reserved atoms to strings,
-  # recursing through plain maps and lists. Structs are left untouched
-  # (handled by the type adapter at evaluation time).
-  defp cel_encode(value) when is_atom(value) do
-    if value in @reserved_atoms, do: value, else: Atom.to_string(value)
-  end
-
-  defp cel_encode(list) when is_list(list), do: Enum.map(list, &cel_encode/1)
-  defp cel_encode(%_{} = struct), do: struct
-
-  defp cel_encode(map) when is_map(map) do
-    Map.new(map, fn {k, v} -> {k, cel_encode(v)} end)
-  end
-
-  defp cel_encode(other), do: other
+  # Encode Elixir values for CEL at the binding boundary. `Celixir.encode/1` is
+  # the single definition of that mapping — see its docs for what is converted
+  # and what is preserved.
+  defp cel_encode(value), do: Celixir.encode(value)
 
   defp normalize_keys(map) when map_size(map) == 0, do: %{}
 
