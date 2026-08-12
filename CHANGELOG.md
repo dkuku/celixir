@@ -1,5 +1,41 @@
 # Changelog
 
+## v0.4.0 (2026-08-12)
+
+### Security
+
+- **Variable bindings no longer create atoms.** `Environment` now stores `variables` and `locals` as `%{String.t() => any()}`. Previously every distinct variable key, and every distinct identifier in a compiled expression, was interned with `String.to_atom/1` — so binding untrusted data (JSON payloads, Ecto JSON columns, external APIs) could exhaust the BEAM atom table and crash the VM unrecoverably. Binding 500 attacker-chosen keys created 500 permanent atoms; it now creates none.
+  - The compiler assigns each free variable a positional atom (`:__cel_var_0__`, `:__cel_var_1__`, …) instead of interning the CEL identifier, so the atom count is bounded by variables-per-expression rather than by the variety of identifiers seen.
+
+  Thanks to [@bruce](https://github.com/bruce) for reporting and implementing this ([#6](https://github.com/dkuku/celixir/pull/6)).
+
+  > **Note**
+  > `Celixir.compile/1` still creates one module and one atom per call, so compiling a stream of distinct untrusted *expressions* remains an atom sink. Cache compiled programs by expression text if expressions are user-supplied.
+
+### Features
+
+- **Atoms are encoded to CEL strings at the boundary.** `Environment.new/1`, `put_variable/3`, `put_local/3` and `put_locals_bulk/2` now convert atoms to strings, recursing through lists and through both the keys and values of plain maps, so `%{role: :admin}` matches `role == 'admin'`. `nil`, `true`, `false` and the numeric sentinels `:nan`, `:infinity`, `:neg_infinity` are preserved as CEL null/bool/number. Integer and boolean map keys are preserved (CEL map keys are int/uint/bool/string). Structs are left untouched for the type adapter.
+- **`Celixir.encode/1` is now the single definition of that encoding**, and `Environment` delegates to it. Previously the two disagreed: `Celixir.encode(:admin)` returned `:admin` while `Environment.new(%{x: :admin})` stored `"admin"`.
+- **String-keyed maps are a first-class input.** `Celixir.eval("severity == 'high'", %{"severity" => "high"})` works directly, and is now the faster path: a string-keyed map containing nothing that needs encoding is bound as-is, with no key conversion and no rebuild. Atom-keyed maps continue to work.
+- **`:collect_list` comprehension kind** — `filter`/`map` comprehensions build their result with prepend + reverse instead of repeated appends, making them O(n) rather than O(n²).
+- **Compiled path optimizations** — free variables are pattern-matched directly out of the environment struct in the function head and inlined into the body, eliminating a map lookup per reference. Comprehension bodies are compiled to closures taking their arguments positionally.
+- Compiled programs propagate errors by raising `Celixir.EvalError` and rescuing at the top of `eval/1`, rather than threading `{:error, _}` tuples through every intermediate operation.
+
+### Breaking changes
+
+- `Environment.variables` and `Environment.locals` are keyed by strings, not atoms. Code that reads these fields directly (e.g. `Map.fetch(env.variables, :name)`) must use string keys. The public `Environment` API — `new/1`, `put_variable/3`, `get_variable/2`, `local?/2` — is unaffected and still accepts atoms.
+- Atoms in bindings are converted to strings, as keys and as values. `Environment.new(%{role: :admin})` previously stored `:admin` and compared unequal to every CEL string; it now stores `"admin"`. Comparisons against CEL literals now succeed where they previously failed.
+- `Celixir.encode/1` converts atoms to strings rather than passing them through, and recurses into map keys. Code relying on it to return atoms unchanged must special-case them.
+
+### Fixed
+
+- **Atom-keyed nested maps answer consistently.** Given `%{p: %{admin: true}}`, `p.admin` resolved but `p['admin']` raised `key "admin" not found in map` and `'admin' in p` returned `false`, because only field access had an atom fallback. Encoding keys at the boundary makes indexing, membership and comprehension agree with field access.
+
+### Known issues
+
+- Maps mixing atom and string keys are normalized based on the first key encountered, so one of the two key types may not resolve. Erlang's iteration order makes this depend on map size. Use a single key type per binding map.
+- Structs are not encoded, so atoms inside them reach expressions as atoms and compare unequal to CEL strings. This applies whether a field is read directly or iterated. Register a type adapter for structs whose contents need to be visible to CEL.
+
 ## v0.3.0 (2026-04-28)
 
 ### Features
