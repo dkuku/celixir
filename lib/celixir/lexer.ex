@@ -411,7 +411,7 @@ defmodule Celixir.Lexer do
     qlen = byte_size(quote)
 
     case input do
-      <<^quote::binary-size(qlen), rest::binary>> ->
+      <<^quote::binary-size(^qlen), rest::binary>> ->
         {:ok, acc |> Enum.reverse() |> IO.iodata_to_binary(), rest, line}
 
       <<"\\", rest::binary>> ->
@@ -431,7 +431,7 @@ defmodule Celixir.Lexer do
     qlen = byte_size(quote)
 
     case input do
-      <<^quote::binary-size(qlen), rest::binary>> ->
+      <<^quote::binary-size(^qlen), rest::binary>> ->
         {:ok, acc |> Enum.reverse() |> IO.iodata_to_binary(), rest, line}
 
       <<?\n, rest::binary>> ->

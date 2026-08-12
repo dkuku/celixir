@@ -9,10 +9,6 @@ if Code.ensure_loaded?(Protobuf) do
     pack/unpack operations.
     """
 
-    # Maps CEL type names to their compiled protobuf modules.
-    # Users can register additional modules via register_module/2.
-    @type_registry %{}
-
     @doc """
     Returns true if the protobuf codec is available.
     """
@@ -109,11 +105,7 @@ if Code.ensure_loaded?(Protobuf) do
     Resolve a CEL type name to a compiled protobuf module.
     """
     def resolve_module(type_name) do
-      # First check static registry
-      case Map.get(@type_registry, type_name) do
-        nil -> resolve_module_dynamic(type_name)
-        mod -> mod
-      end
+      resolve_module_dynamic(type_name)
     end
 
     # Try to resolve by converting the proto package name to an Elixir module name.

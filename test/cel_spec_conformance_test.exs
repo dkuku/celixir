@@ -38,16 +38,11 @@ for file <- Path.wildcard(Path.join(testdata_dir, "*.textproto")) do
         test_data = unquote(Macro.escape(test))
         file_name = unquote(file_name)
         section_name = unquote(section.name)
-        skip? = unquote(skip?)
 
-        if skip? do
-          :ok
+        if test_data[:check_only] do
+          run_cel_spec_check_test(test_data)
         else
-          if test_data[:check_only] do
-            run_cel_spec_check_test(test_data)
-          else
-            run_cel_spec_test(file_name, section_name, test_data)
-          end
+          run_cel_spec_test(file_name, section_name, test_data)
         end
       end
     end

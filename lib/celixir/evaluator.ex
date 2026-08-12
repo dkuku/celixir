@@ -804,15 +804,14 @@ defmodule Celixir.Evaluator do
     MapSet.member?(@proto3_oneof_fields, field)
   end
 
-  # Proto3 default values: scalar fields set to zero/false/empty are considered "not present"
+  # Proto3 default values: scalar fields set to zero/false/empty are considered "not present".
+  # Repeated and map fields never reach here — select_test/3 handles them before this check.
   defp proto3_default_value?(nil), do: true
   defp proto3_default_value?(0), do: true
   defp proto3_default_value?(+0.0), do: true
   defp proto3_default_value?(-0.0), do: true
   defp proto3_default_value?(false), do: true
   defp proto3_default_value?(""), do: true
-  defp proto3_default_value?(v) when is_list(v), do: v == []
-  defp proto3_default_value?(v) when is_map(v), do: v == %{}
   defp proto3_default_value?(_), do: false
 
   defp is_atom_key?(map, field) do
@@ -1536,9 +1535,6 @@ defmodule Celixir.Evaluator do
 
       {:cel_cidr, addr, prefix} ->
         List.to_string(:inet.ntoa(addr)) <> "/" <> Integer.to_string(prefix)
-
-      v when is_integer(v) ->
-        Integer.to_string(v)
 
       _ ->
         cel_error("no_matching_overload: string() on #{cel_typeof(arg)}")
