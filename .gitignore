@@ -25,3 +25,7 @@ celixir-*.tar
 # Expert directory
 .expert/
 
+
+# Agent scratch directories
+/.claude/
+/memory/

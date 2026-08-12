@@ -83,17 +83,17 @@ defmodule Celixir.Environment do
 
   @doc "Adds a variable binding."
   def put_variable(%__MODULE__{} = env, name, value) do
-    %{env | variables: Map.put(env.variables, to_string_key(name), value)}
+    %{env | variables: Map.put(env.variables, to_string_key(name), cel_encode(value))}
   end
 
   @doc "Adds a local variable binding that shadows container-resolved and outer names."
   def put_local(%__MODULE__{} = env, name, value) do
-    %{env | locals: Map.put(env.locals, to_string_key(name), value)}
+    %{env | locals: Map.put(env.locals, to_string_key(name), cel_encode(value))}
   end
 
   @doc "Adds multiple local variable bindings at once (single struct copy instead of N copies)."
   def put_locals_bulk(%__MODULE__{} = env, new_locals) when is_map(new_locals) do
-    stringified = Map.new(new_locals, fn {k, v} -> {to_string_key(k), v} end)
+    stringified = Map.new(new_locals, fn {k, v} -> {to_string_key(k), cel_encode(v)} end)
     %{env | locals: Map.merge(env.locals, stringified)}
   end
 
@@ -216,15 +216,37 @@ defmodule Celixir.Environment do
 
   defp to_string_key(name) when is_binary(name), do: name
   defp to_string_key(name) when is_atom(name), do: Atom.to_string(name)
+  defp to_string_key(name), do: to_string(name)
+
+  # Atoms reserved for CEL semantics — preserved through the boundary.
+  # nil/true/false map to CEL null/bool; the numeric sentinels carry NaN/±Inf.
+  @reserved_atoms [nil, true, false, :nan, :infinity, :neg_infinity]
+
+  # Encode Elixir values for CEL: convert non-reserved atoms to strings,
+  # recursing through plain maps and lists. Structs are left untouched
+  # (handled by the type adapter at evaluation time).
+  defp cel_encode(value) when is_atom(value) do
+    if value in @reserved_atoms, do: value, else: Atom.to_string(value)
+  end
+
+  defp cel_encode(list) when is_list(list), do: Enum.map(list, &cel_encode/1)
+  defp cel_encode(%_{} = struct), do: struct
+
+  defp cel_encode(map) when is_map(map) do
+    Map.new(map, fn {k, v} -> {k, cel_encode(v)} end)
+  end
+
+  defp cel_encode(other), do: other
 
   defp normalize_keys(map) when map_size(map) == 0, do: %{}
 
   defp normalize_keys(map) do
-    # Fast path: if the first key is already a string, assume all are (common case
-    # when the caller passes string-keyed maps from JSON/database).
+    # Keys and values are normalized in a single pass. Fast path: if the first key
+    # is already a string, assume all are (common case when the caller passes
+    # string-keyed maps from JSON/database) and skip the key conversion.
     case :maps.next(:maps.iterator(map)) do
-      {k, _v, _rest} when is_binary(k) -> map
-      _ -> Map.new(map, fn {k, v} -> {to_string_key(k), v} end)
+      {k, _v, _rest} when is_binary(k) -> Map.new(map, fn {k, v} -> {k, cel_encode(v)} end)
+      _ -> Map.new(map, fn {k, v} -> {to_string_key(k), cel_encode(v)} end)
     end
   end
 end
