@@ -91,6 +91,19 @@ defmodule Celixir.Environment do
     %{env | locals: Map.put(env.locals, to_string_key(name), cel_encode(value))}
   end
 
+  # Binds a local without encoding the value. For interpreter-internal bindings
+  # (comprehension iteration variables, accumulators, cel.block slots) whose
+  # values are already CEL-encoded — they came from an encoded binding or from
+  # evaluating a CEL expression.
+  #
+  # This is not an optimization detail that can be skipped: comprehension
+  # accumulators grow with each iteration, so re-encoding one on every step
+  # makes the whole comprehension quadratic.
+  @doc false
+  def put_local_raw(%__MODULE__{} = env, name, value) do
+    %{env | locals: Map.put(env.locals, to_string_key(name), value)}
+  end
+
   @doc "Adds multiple local variable bindings at once (single struct copy instead of N copies)."
   def put_locals_bulk(%__MODULE__{} = env, new_locals) when is_map(new_locals) do
     stringified = Map.new(new_locals, fn {k, v} -> {to_string_key(k), cel_encode(v)} end)
@@ -230,8 +243,16 @@ defmodule Celixir.Environment do
     # is already a string, assume all are (common case when the caller passes
     # string-keyed maps from JSON/database) and skip the key conversion.
     case :maps.next(:maps.iterator(map)) do
-      {k, _v, _rest} when is_binary(k) -> Map.new(map, fn {k, v} -> {k, cel_encode(v)} end)
-      _ -> Map.new(map, fn {k, v} -> {to_string_key(k), cel_encode(v)} end)
+      {k, _v, _rest} when is_binary(k) ->
+        # Keys are already strings, so the map only needs rebuilding if some
+        # value needs encoding. Returning it untouched keeps the common case
+        # (string-keyed data straight out of JSON) allocation-free.
+        if Celixir.needs_encoding?(map),
+          do: Map.new(map, fn {k, v} -> {k, cel_encode(v)} end),
+          else: map
+
+      _ ->
+        Map.new(map, fn {k, v} -> {to_string_key(k), cel_encode(v)} end)
     end
   end
 end

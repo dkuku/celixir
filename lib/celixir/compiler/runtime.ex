@@ -255,7 +255,7 @@ defmodule Celixir.Compiler.Runtime do
     final_env =
       Enum.reduce(Enum.with_index(binding_thunks), env, fn {thunk, idx}, acc_env ->
         v = thunk.(acc_env)
-        Environment.put_local(acc_env, "__cel_block_#{idx}__", v)
+        Environment.put_local_raw(acc_env, "__cel_block_#{idx}__", v)
       end)
 
     result_thunk.(final_env)

@@ -371,18 +371,48 @@ defmodule Celixir do
   # nil/true/false map to CEL null/bool; the numeric sentinels carry NaN/±Inf.
   @reserved_atoms [nil, true, false, :nan, :infinity, :neg_infinity]
 
-  def encode({:optional, v}), do: %Optional{has_value: true, value: encode(v)}
-  def encode(:optional_none), do: %Optional{has_value: false}
+  def encode(value) do
+    if needs_encoding?(value), do: do_encode(value), else: value
+  end
 
-  def encode(v) when is_atom(v) do
+  @doc false
+  # Whether `encode/1` would change this value. Lets callers skip rebuilding a
+  # structure that is already CEL-shaped — the common case for string-keyed
+  # data out of JSON. Short-circuits on the first value that needs converting.
+  def needs_encoding?({:optional, _}), do: true
+  def needs_encoding?(v) when is_atom(v), do: v not in @reserved_atoms
+  def needs_encoding?(list) when is_list(list), do: Enum.any?(list, &needs_encoding?/1)
+  def needs_encoding?(%_{}), do: false
+
+  def needs_encoding?(map) when is_map(map) do
+    # Walks the map with :maps.next rather than Enum.any?, which would pay for
+    # the Enumerable protocol on what is otherwise an allocation-free scan.
+    map_needs_encoding?(:maps.next(:maps.iterator(map)))
+  end
+
+  def needs_encoding?(_), do: false
+
+  defp map_needs_encoding?(:none), do: false
+
+  defp map_needs_encoding?({k, v, rest}) do
+    needs_encoding?(k) or needs_encoding?(v) or map_needs_encoding?(:maps.next(rest))
+  end
+
+  # Unconditional encoder. Recurses into itself rather than back through
+  # `encode/1` so the needs_encoding?/1 scan happens once at the top rather
+  # than once per node.
+  defp do_encode({:optional, v}), do: %Optional{has_value: true, value: do_encode(v)}
+  defp do_encode(:optional_none), do: %Optional{has_value: false}
+
+  defp do_encode(v) when is_atom(v) do
     if v in @reserved_atoms, do: v, else: Atom.to_string(v)
   end
 
-  def encode(list) when is_list(list), do: Enum.map(list, &encode/1)
+  defp do_encode(list) when is_list(list), do: Enum.map(list, &do_encode/1)
 
-  def encode(map) when is_map(map) and not is_struct(map) do
-    Map.new(map, fn {k, v} -> {encode(k), encode(v)} end)
+  defp do_encode(map) when is_map(map) and not is_struct(map) do
+    Map.new(map, fn {k, v} -> {do_encode(k), do_encode(v)} end)
   end
 
-  def encode(v), do: v
+  defp do_encode(v), do: v
 end

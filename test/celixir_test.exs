@@ -1,6 +1,8 @@
 defmodule CelixirTest do
   use ExUnit.Case
 
+  doctest Celixir
+
   alias Celixir.Types.Duration
   alias Celixir.Types.Timestamp
 

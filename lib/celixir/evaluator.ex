@@ -295,7 +295,7 @@ defmodule Celixir.Evaluator do
       |> Enum.with_index()
       |> Enum.reduce(env, fn {binding_expr, idx}, acc_env ->
         val = do_eval(binding_expr, acc_env)
-        Environment.put_local(acc_env, "__cel_block_#{idx}__", val)
+        Environment.put_local_raw(acc_env, "__cel_block_#{idx}__", val)
       end)
 
     do_eval(result, env2)
@@ -345,7 +345,7 @@ defmodule Celixir.Evaluator do
         end
 
       with {:ok, final_acc} <- ensure_value(final_acc) do
-        result_env = Environment.put_local(env, comp.acc_var, final_acc)
+        result_env = Environment.put_local_raw(env, comp.acc_var, final_acc)
         do_eval(comp.result, result_env)
       end
     end
@@ -388,13 +388,13 @@ defmodule Celixir.Evaluator do
   end
 
   defp bind_iter_vars(env, comp, {var1_val}) do
-    Environment.put_local(env, comp.iter_var, var1_val)
+    Environment.put_local_raw(env, comp.iter_var, var1_val)
   end
 
   defp bind_iter_vars(env, comp, {var1_val, var2_val}) do
     env
-    |> Environment.put_local(comp.iter_var, var1_val)
-    |> Environment.put_local(comp.iter_var2, var2_val)
+    |> Environment.put_local_raw(comp.iter_var, var1_val)
+    |> Environment.put_local_raw(comp.iter_var2, var2_val)
   end
 
   defp eval_standard_comprehension(items, comp, acc, env) do
@@ -402,7 +402,7 @@ defmodule Celixir.Evaluator do
       loop_env =
         env
         |> bind_iter_vars(comp, item)
-        |> Environment.put_local(comp.acc_var, current_acc)
+        |> Environment.put_local_raw(comp.acc_var, current_acc)
 
       cond_val = do_eval(comp.loop_condition, loop_env)
 
@@ -419,7 +419,7 @@ defmodule Celixir.Evaluator do
   defp eval_collect_list(items, comp, filter_expr, transform_expr, env) do
     result =
       Enum.reduce_while(items, [], fn item, acc ->
-        loop_env = env |> bind_iter_vars(comp, item) |> Environment.put_local(comp.acc_var, acc)
+        loop_env = env |> bind_iter_vars(comp, item) |> Environment.put_local_raw(comp.acc_var, acc)
 
         include =
           if filter_expr do
@@ -454,7 +454,7 @@ defmodule Celixir.Evaluator do
       loop_env =
         env
         |> bind_iter_vars(comp, item)
-        |> Environment.put_local(comp.acc_var, current_acc)
+        |> Environment.put_local_raw(comp.acc_var, current_acc)
 
       with {:ok, include} <- eval_filter(filter_expr, loop_env),
            {:ok, new_acc} <- apply_transform(include, key, transform_expr, loop_env, current_acc) do
@@ -515,7 +515,7 @@ defmodule Celixir.Evaluator do
       loop_env =
         env
         |> bind_iter_vars(comp, item)
-        |> Environment.put_local(comp.acc_var, current_acc)
+        |> Environment.put_local_raw(comp.acc_var, current_acc)
 
       with {:ok, include} <- eval_filter(filter_expr, loop_env),
            {:ok, new_acc} <- apply_map_entry_transform(include, transform_expr, loop_env, current_acc) do
