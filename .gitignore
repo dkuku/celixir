@@ -29,3 +29,6 @@ celixir-*.tar
 # Agent scratch directories
 /.claude/
 /memory/
+
+# Benchmark baseline — timings from one machine, meaningless on another
+/bench/baseline.benchee

@@ -17,7 +17,15 @@ defmodule Celixir.MixProject do
       docs: docs(),
       name: "Celixir",
       source_url: @source_url,
-      homepage_url: @source_url
+      homepage_url: @source_url,
+      aliases: aliases()
+    ]
+  end
+
+  defp aliases do
+    [
+      "bench.baseline": ["run bench/regression.exs --save"],
+      "bench.check": ["run bench/regression.exs"]
     ]
   end
 
