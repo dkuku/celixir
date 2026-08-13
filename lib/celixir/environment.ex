@@ -104,10 +104,14 @@ defmodule Celixir.Environment do
     %{env | locals: Map.put(env.locals, to_string_key(name), value)}
   end
 
-  @doc "Adds multiple local variable bindings at once (single struct copy instead of N copies)."
-  def put_locals_bulk(%__MODULE__{} = env, new_locals) when is_map(new_locals) do
-    stringified = Map.new(new_locals, fn {k, v} -> {to_string_key(k), cel_encode(v)} end)
-    %{env | locals: Map.merge(env.locals, stringified)}
+  # `put_variable/3` without the encoding pass, for the same reason as
+  # `put_local_raw/3`: the value is already CEL-encoded. Used for optMap and
+  # optFlatMap, whose bound value was unwrapped from an `Optional` that came
+  # through the boundary. Unlike comprehension iteration variables these bind
+  # as variables, not locals, so they keep normal container resolution.
+  @doc false
+  def put_variable_raw(%__MODULE__{} = env, name, value) do
+    %{env | variables: Map.put(env.variables, to_string_key(name), value)}
   end
 
   @doc "Sets the container (namespace) for identifier resolution."
@@ -240,15 +244,19 @@ defmodule Celixir.Environment do
 
   defp normalize_keys(map) do
     # Keys and values are normalized in a single pass. Fast path: if the first key
-    # is already a string, assume all are (common case when the caller passes
-    # string-keyed maps from JSON/database) and skip the key conversion.
+    # is already a string, the map is probably string-keyed throughout (the common
+    # case when the caller passes data straight out of JSON/a database) and can be
+    # bound as-is.
     case :maps.next(:maps.iterator(map)) do
       {k, _v, _rest} when is_binary(k) ->
-        # Keys are already strings, so the map only needs rebuilding if some
-        # value needs encoding. Returning it untouched keeps the common case
-        # (string-keyed data straight out of JSON) allocation-free.
+        # `needs_encoding?/1` scans keys as well as values, so a stray atom key in
+        # an otherwise string-keyed map lands here too. Whenever we rebuild we
+        # convert keys as well — `to_string_key/1` is a no-op on the binaries that
+        # make up the overwhelming majority, so mixed maps come out correct at no
+        # cost to the uniform case. Only a map needing no encoding at all skips the
+        # rebuild, and that one is already uniformly string-keyed.
         if Celixir.needs_encoding?(map),
-          do: Map.new(map, fn {k, v} -> {k, cel_encode(v)} end),
+          do: Map.new(map, fn {k, v} -> {to_string_key(k), cel_encode(v)} end),
           else: map
 
       _ ->

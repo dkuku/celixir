@@ -481,7 +481,7 @@ defmodule Celixir.Compiler.Runtime do
   # --- Optional lambda (optFlatMap / optMap) ---
 
   def opt_lambda(env, %Optional{has_value: true, value: v}, var, kind, expr_f) do
-    inner_env = Environment.put_variable(env, var, v)
+    inner_env = Environment.put_variable_raw(env, var, v)
     result = expr_f.(inner_env)
 
     case kind do

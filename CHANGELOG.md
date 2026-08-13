@@ -14,7 +14,7 @@
 
 ### Features
 
-- **Atoms are encoded to CEL strings at the boundary.** `Environment.new/1`, `put_variable/3`, `put_local/3` and `put_locals_bulk/2` now convert atoms to strings, recursing through lists and through both the keys and values of plain maps, so `%{role: :admin}` matches `role == 'admin'`. `nil`, `true`, `false` and the numeric sentinels `:nan`, `:infinity`, `:neg_infinity` are preserved as CEL null/bool/number. Integer and boolean map keys are preserved (CEL map keys are int/uint/bool/string). Structs are left untouched for the type adapter.
+- **Atoms are encoded to CEL strings at the boundary.** `Environment.new/1`, `put_variable/3` and `put_local/3` now convert atoms to strings, recursing through lists and through both the keys and values of plain maps, so `%{role: :admin}` matches `role == 'admin'`. `nil`, `true`, `false` and the numeric sentinels `:nan`, `:infinity`, `:neg_infinity` are preserved as CEL null/bool/number. Integer and boolean map keys are preserved (CEL map keys are int/uint/bool/string). Structs are left untouched for the type adapter.
 - **`Celixir.encode/1` is now the single definition of that encoding**, and `Environment` delegates to it. Previously the two disagreed: `Celixir.encode(:admin)` returned `:admin` while `Environment.new(%{x: :admin})` stored `"admin"`.
 - **String-keyed maps are a first-class input.** `Celixir.eval("severity == 'high'", %{"severity" => "high"})` works directly, and is now the faster path: a string-keyed map containing nothing that needs encoding is bound as-is, with no key conversion and no rebuild. Atom-keyed maps continue to work.
 - **`:collect_list` comprehension kind** — `filter`/`map` comprehensions build their result with prepend + reverse instead of repeated appends, making them O(n) rather than O(n²).
@@ -30,10 +30,10 @@
 ### Fixed
 
 - **Atom-keyed nested maps answer consistently.** Given `%{p: %{admin: true}}`, `p.admin` resolved but `p['admin']` raised `key "admin" not found in map` and `'admin' in p` returned `false`, because only field access had an atom fallback. Encoding keys at the boundary makes indexing, membership and comprehension agree with field access.
+- **Maps mixing atom and string keys resolve both.** Key normalization short-circuits when the map's first key is already a string, and Erlang orders atoms before binaries only in maps under 32 entries — so past that size a mixed map could iterate a string key first and leave its atom-keyed variables undefined. Whenever the map is rebuilt its keys are now converted too, which costs the uniform string-keyed case nothing.
 
 ### Known issues
 
-- Maps mixing atom and string keys are normalized based on the first key encountered, so one of the two key types may not resolve. Erlang's iteration order makes this depend on map size. Use a single key type per binding map.
 - Structs are not encoded, so atoms inside them reach expressions as atoms and compare unequal to CEL strings. This applies whether a field is read directly or iterated. Register a type adapter for structs whose contents need to be visible to CEL.
 
 ## v0.3.0 (2026-04-28)

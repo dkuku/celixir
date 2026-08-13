@@ -254,7 +254,7 @@ defmodule Celixir.Evaluator do
   defp do_eval(%AST.OptLambda{kind: kind, target: target, var: var, expr: expr}, env) do
     with_value(do_eval(target, env), fn
       %Optional{has_value: true, value: v} ->
-        inner_env = Environment.put_variable(env, var, v)
+        inner_env = Environment.put_variable_raw(env, var, v)
         result = do_eval(expr, inner_env)
 
         case kind do

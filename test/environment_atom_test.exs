@@ -117,6 +117,63 @@ defmodule Celixir.EnvironmentAtomTest do
     end
   end
 
+  describe "maps mixing atom and string keys" do
+    # normalize_keys/1 decides on the first key the map iterates. Erlang orders
+    # atoms before binaries in a small (flatmap) map, so a mixed map under 32
+    # entries always led with the atom and took the full conversion. Past 32 the
+    # map becomes a hashmap, iteration order goes to hashing, and a mixed map
+    # could lead with a binary — which used to skip key conversion entirely and
+    # leave the atom-keyed variable unresolvable.
+    setup do
+      %{big: for(i <- 1..40, into: %{}, do: {"k#{i}", i})}
+    end
+
+    test "atom key resolves in a small mixed map" do
+      assert {:ok, true} = Celixir.eval("role == 'admin'", %{"x" => 1, :role => :admin})
+    end
+
+    test "atom key resolves in a large mixed map", %{big: big} do
+      mixed = Map.put(big, :role, :admin)
+      assert {:ok, "k38"} = Celixir.eval("k38", %{"k38" => "k38"})
+      assert {:ok, true} = Celixir.eval("role == 'admin'", mixed)
+      assert {:ok, true} = Celixir.eval("k1 == 1", mixed)
+    end
+
+    test "atom key resolves when no value needs encoding", %{big: big} do
+      # The rebuild is gated on needs_encoding?/1, which scans keys as well as
+      # values — so an atom key alone must be enough to trigger it.
+      mixed = Map.put(big, :plain, "no atoms here")
+      assert {:ok, true} = Celixir.eval("plain == 'no atoms here'", mixed)
+    end
+
+    test "the compiled path agrees with the eval path", %{big: big} do
+      mixed = Map.put(big, :role, :admin)
+      {:ok, program} = Celixir.compile("role == 'admin'")
+      assert {:ok, true} = Celixir.Program.eval(program, mixed)
+      assert {:ok, true} = Celixir.Program.eval(program, %{"x" => 1, :role => :admin})
+    end
+
+    test "a uniformly string-keyed map is still bound without rebuilding", %{big: big} do
+      # The allocation-free fast path: same term back, not a copy.
+      assert :erts_debug.same(Environment.new(big).variables, big)
+    end
+  end
+
+  describe "optional lambdas" do
+    # optMap/optFlatMap bind their variable from a value already unwrapped from
+    # an Optional, so it has been through the boundary once already. Binding it
+    # raw must not change what the expression sees.
+    test "optMap sees an encoded value" do
+      env = Environment.new(%{m: %{"role" => :admin}})
+      assert {:ok, true} = Celixir.eval("m[?'role'].optMap(r, r == 'admin').hasValue()", env)
+    end
+
+    test "optFlatMap sees an encoded value" do
+      env = Environment.new(%{m: %{"role" => :admin}})
+      assert {:ok, "admin"} = Celixir.eval("m[?'role'].optFlatMap(r, optional.of(r)).value()", env)
+    end
+  end
+
   describe "comprehensions stay linear" do
     # Comprehension accumulators grow with each iteration. Encoding one on every
     # step made map/filter quadratic: 8k items took 373ms against 1ms without.
