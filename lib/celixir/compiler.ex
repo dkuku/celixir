@@ -46,8 +46,14 @@ defmodule Celixir.Compiler do
 
     module_name = :"Celixir.Compiled.#{:erlang.unique_integer([:positive, :monotonic])}"
 
+    # Map each free variable name to a positional atom (:__cel_var_0__, :__cel_var_1__, ...).
+    # This avoids creating atoms from CEL identifier names, which is critical when
+    # expressions are untrusted (user-authored); unbounded unique identifiers would
+    # otherwise exhaust the atom table.
+    var_index_map = free_vars |> Enum.with_index() |> Map.new(fn {name, idx} -> {name, :"__cel_var_#{idx}__"} end)
+
     # Generate the body with free variables inlined
-    ctx = %{free_vars: MapSet.new(free_vars), bound_vars: MapSet.new(), comp_var_map: %{}}
+    ctx = %{free_vars: MapSet.new(free_vars), bound_vars: MapSet.new(), comp_var_map: %{}, var_index_map: var_index_map}
     body = to_quoted(ast, ctx)
 
     # Build the pattern-matching function head that extracts variables directly
@@ -67,22 +73,22 @@ defmodule Celixir.Compiler do
   defp build_eval_fn(body, []) do
     quote do
       def eval(__cel_env__) do
-        try do
-          {:ok, Celixir.unwrap(unquote(body))}
-        rescue
-          e in Celixir.EvalError -> {:error, e.message}
-        end
+        {:ok, Celixir.unwrap(unquote(body))}
+      rescue
+        e in Celixir.EvalError -> {:error, e.message}
       end
     end
   end
 
   defp build_eval_fn(body, free_vars) do
-    # Build a map pattern: %{x: x, y: y, ...} (atom keys)
+    # Build a map pattern: %{"x" => __cel_var_0__, "y" => __cel_var_1__, ...}
+    # Uses positional atoms as Elixir AST variable names rather than converting
+    # CEL identifier strings to atoms. This prevents atom exhaustion when compiling
+    # untrusted expressions with arbitrary identifier names.
     var_pairs =
-      Enum.map(free_vars, fn name ->
-        atom = String.to_atom(name)
-        var = Macro.var(atom, __MODULE__)
-        {atom, var}
+      Enum.with_index(free_vars, fn name, idx ->
+        var = Macro.var(:"__cel_var_#{idx}__", __MODULE__)
+        {name, var}
       end)
 
     vars_map_pattern = {:%{}, [], var_pairs}
@@ -95,12 +101,11 @@ defmodule Celixir.Compiler do
     # Fallback when a free variable is missing from the environment
     missing_check =
       Enum.reduce(Enum.reverse(free_vars), nil, fn name, acc ->
-        atom = String.to_atom(name)
         if acc == nil do
           quote do: {:error, "undefined variable: #{unquote(name)}"}
         else
           quote do
-            if Map.has_key?(__cel_env__.variables, unquote(atom)) do
+            if Map.has_key?(__cel_env__.variables, unquote(name)) do
               unquote(acc)
             else
               {:error, "undefined variable: #{unquote(name)}"}
@@ -111,11 +116,9 @@ defmodule Celixir.Compiler do
 
     quote do
       def eval(unquote(env_pattern)) do
-        try do
-          {:ok, Celixir.unwrap(unquote(body))}
-        rescue
-          e in Celixir.EvalError -> {:error, e.message}
-        end
+        {:ok, Celixir.unwrap(unquote(body))}
+      rescue
+        e in Celixir.EvalError -> {:error, e.message}
       end
 
       def eval(__cel_env__) do
@@ -285,13 +288,15 @@ defmodule Celixir.Compiler do
         _ ->
           # If target is a qualified chain, extract the base ident name
           case extract_base_name(target) do
-            "<expr>" -> namespace_base_idents(target, acc)
+            "<expr>" ->
+              namespace_base_idents(target, acc)
+
             base_name when base_name != nil ->
               # Only add if extract_qualified_name returns non-nil (it's a chain)
-              if extract_qualified_name(target) != nil do
-                MapSet.put(acc, base_name)
-              else
+              if extract_qualified_name(target) == nil do
                 namespace_base_idents(target, acc)
+              else
+                MapSet.put(acc, base_name)
               end
           end
       end
@@ -336,6 +341,7 @@ defmodule Celixir.Compiler do
     Enum.reduce(entries, acc, fn
       {:optional, k, v}, a ->
         a |> then(&namespace_base_idents(k, &1)) |> then(&namespace_base_idents(v, &1))
+
       {k, v}, a ->
         a |> then(&namespace_base_idents(k, &1)) |> then(&namespace_base_idents(v, &1))
     end)
@@ -416,12 +422,14 @@ defmodule Celixir.Compiler do
       Map.has_key?(ctx.comp_var_map, name) ->
         Macro.var(Map.get(ctx.comp_var_map, name), __MODULE__)
 
-      # Free variable inlining — pattern-matched from the struct, no lookup needed
+      # Free variable inlining — reference the positional variable bound in the
+      # pattern-matched function head (e.g. :__cel_var_0__ for the first free var).
+      # No atoms are created from the CEL identifier name.
       MapSet.member?(ctx.free_vars, name) and not MapSet.member?(ctx.bound_vars, name) ->
-        Macro.var(String.to_atom(name), __MODULE__)
+        Macro.var(Map.fetch!(ctx.var_index_map, name), __MODULE__)
 
       true ->
-        quote do: Celixir.Compiler.Runtime.lookup(__cel_env__, unquote(String.to_atom(name)))
+        quote do: Celixir.Compiler.Runtime.lookup(__cel_env__, unquote(name))
     end
   end
 
@@ -591,9 +599,15 @@ defmodule Celixir.Compiler do
 
     quote do
       case unquote(cq) do
-        true -> unquote(tq)
-        false -> unquote(fq)
-        v -> raise Celixir.EvalError, message: "ternary condition must be bool, got #{Celixir.Compiler.Runtime.cel_typeof(v)}"
+        true ->
+          unquote(tq)
+
+        false ->
+          unquote(fq)
+
+        v ->
+          raise Celixir.EvalError,
+            message: "ternary condition must be bool, got #{Celixir.Compiler.Runtime.cel_typeof(v)}"
       end
     end
   end
@@ -707,12 +721,12 @@ defmodule Celixir.Compiler do
       MapSet.member?(ctx.free_vars, base_name) or Map.has_key?(ctx.comp_var_map, base_name)
 
     if qname && not is_known_var do
-      base_atom = String.to_atom(base_name)
       quote do
-        case Celixir.Compiler.Runtime.lookup_opt(__cel_env__, unquote(base_atom)) do
+        case Celixir.Compiler.Runtime.lookup_opt(__cel_env__, unquote(base_name)) do
           :error ->
             # Base name is not a variable — try as a qualified function call
             Celixir.Compiler.Runtime.call(__cel_env__, unquote(qname), [unquote_splicing(args_quoted)])
+
           {:ok, _} ->
             # Base name is a variable — evaluate full target and call method
             Celixir.Compiler.Runtime.method(__cel_env__, unquote(name), unquote(tq), [unquote_splicing(args_quoted)])
@@ -762,11 +776,10 @@ defmodule Celixir.Compiler do
             if filter_expr do
               fq_body = to_quoted(filter_expr, inner_ctx)
               quote do: fn __cel_env__, unquote(v1), unquote(v2), unquote(acc) -> unquote(fq_body) end
-            else
-              nil
             end
 
-          quote do: {:transform_map, fn __cel_env__, unquote(v1), unquote(v2), unquote(acc) -> unquote(tq) end, unquote(fq)}
+          quote do:
+                  {:transform_map, fn __cel_env__, unquote(v1), unquote(v2), unquote(acc) -> unquote(tq) end, unquote(fq)}
 
         {:transform_map_entry, transform_expr, filter_expr} ->
           tq = to_quoted(transform_expr, inner_ctx)
@@ -775,11 +788,11 @@ defmodule Celixir.Compiler do
             if filter_expr do
               fq_body = to_quoted(filter_expr, inner_ctx)
               quote do: fn __cel_env__, unquote(v1), unquote(v2), unquote(acc) -> unquote(fq_body) end
-            else
-              nil
             end
 
-          quote do: {:transform_map_entry, fn __cel_env__, unquote(v1), unquote(v2), unquote(acc) -> unquote(tq) end, unquote(fq)}
+          quote do:
+                  {:transform_map_entry, fn __cel_env__, unquote(v1), unquote(v2), unquote(acc) -> unquote(tq) end,
+                   unquote(fq)}
 
         {:sort_by, key_expr} ->
           kq = to_quoted(key_expr, inner_ctx)
@@ -792,11 +805,10 @@ defmodule Celixir.Compiler do
             if filter_expr do
               fq_body = to_quoted(filter_expr, inner_ctx)
               quote do: fn __cel_env__, unquote(v1), unquote(v2), unquote(acc) -> unquote(fq_body) end
-            else
-              nil
             end
 
-          quote do: {:collect_list, fn __cel_env__, unquote(v1), unquote(v2), unquote(acc) -> unquote(tq) end, unquote(fq)}
+          quote do:
+                  {:collect_list, fn __cel_env__, unquote(v1), unquote(v2), unquote(acc) -> unquote(tq) end, unquote(fq)}
 
         :standard ->
           quote do: :standard

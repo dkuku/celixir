@@ -9,22 +9,22 @@ defmodule Celixir.Compiler.Runtime do
   alias Celixir.Types.Optional
 
   @type_denotations %{
-    bool: :bool,
-    int: :int,
-    uint: :uint,
-    double: :double,
-    string: :string,
-    bytes: :bytes,
-    list: :list,
-    map: :map,
-    type: :type,
-    null_type: :null_type,
-    optional_type: :optional_type
+    "bool" => :bool,
+    "int" => :int,
+    "uint" => :uint,
+    "double" => :double,
+    "string" => :string,
+    "bytes" => :bytes,
+    "list" => :list,
+    "map" => :map,
+    "type" => :type,
+    "null_type" => :null_type,
+    "optional_type" => :optional_type
   }
 
   # --- Variable resolution ---
 
-  def lookup(env, name) when is_atom(name) do
+  def lookup(env, name) when is_binary(name) do
     case Environment.get_variable(env, name) do
       {:ok, value} ->
         normalize_value(value)
@@ -37,16 +37,26 @@ defmodule Celixir.Compiler.Runtime do
     end
   end
 
+  def lookup(env, name) when is_atom(name) do
+    lookup(env, Atom.to_string(name))
+  end
+
   # Returns {:ok, value} | :error — never raises. Used for qualified method dispatch.
-  def lookup_opt(env, name) when is_atom(name) do
+  def lookup_opt(env, name) when is_binary(name) do
     case Environment.get_variable(env, name) do
-      {:ok, value} -> {:ok, normalize_value(value)}
+      {:ok, value} ->
+        {:ok, normalize_value(value)}
+
       :error ->
         case Map.get(@type_denotations, name) do
           nil -> :error
           type_val -> {:ok, type_val}
         end
     end
+  end
+
+  def lookup_opt(env, name) when is_atom(name) do
+    lookup_opt(env, Atom.to_string(name))
   end
 
   # Fast path: primitive types don't need normalization
@@ -156,7 +166,7 @@ defmodule Celixir.Compiler.Runtime do
 
   # --- Field selection ---
 
-  def select(env, operand_val, field, nil, test_only) do
+  def select(_env, operand_val, field, nil, test_only) do
     cel_raise(Celixir.Evaluator.dispatch_select(operand_val, field, test_only))
   end
 
@@ -199,10 +209,13 @@ defmodule Celixir.Compiler.Runtime do
     Enum.reduce(entries, %{}, fn
       {:__cel_opt_entry__, k, %Optional{has_value: true, value: v}}, acc ->
         do_add_map_entry!(k, v, acc)
+
       {:__cel_opt_entry__, _k, %Optional{has_value: false}}, acc ->
         acc
+
       {:__cel_opt_entry__, k, v}, acc ->
         do_add_map_entry!(k, v, acc)
+
       {:__cel_entry__, k, v}, acc ->
         do_add_map_entry!(k, v, acc)
     end)
@@ -229,8 +242,7 @@ defmodule Celixir.Compiler.Runtime do
     cel_raise(Celixir.Proto.finalize_struct(qualified_name, fields))
   end
 
-  defp qualify_struct_type(type_name, %{container: container})
-       when is_binary(container) and container != "" do
+  defp qualify_struct_type(type_name, %{container: container}) when is_binary(container) and container != "" do
     qualified = container <> "." <> type_name
     if Celixir.Proto.get_schema(qualified), do: qualified, else: type_name
   end
@@ -256,7 +268,18 @@ defmodule Celixir.Compiler.Runtime do
   end
 
   # Fast path: list range, no iter_var2, collect_list — prepend + reverse, O(n)
-  defp run_comprehension(env, range, _iter_var, nil, _acc_var, _acc_init, _loop_cond_f, _loop_step_f, result_f, {:collect_list, transform_f, filter_f})
+  defp run_comprehension(
+         env,
+         range,
+         _iter_var,
+         nil,
+         _acc_var,
+         _acc_init,
+         _loop_cond_f,
+         _loop_step_f,
+         result_f,
+         {:collect_list, transform_f, filter_f}
+       )
        when is_list(range) do
     acc =
       Enum.reduce(range, [], fn v1, acc ->
@@ -306,7 +329,18 @@ defmodule Celixir.Compiler.Runtime do
   defp item_v2({_v1}), do: nil
   defp item_v2({_v1, v2}), do: v2
 
-  defp run_comprehension_items(env, items, _iter_var, _iter_var2, _acc_var, acc_init, loop_cond_f, loop_step_f, result_f, :standard) do
+  defp run_comprehension_items(
+         env,
+         items,
+         _iter_var,
+         _iter_var2,
+         _acc_var,
+         acc_init,
+         loop_cond_f,
+         loop_step_f,
+         result_f,
+         :standard
+       ) do
     final_acc =
       Enum.reduce_while(items, acc_init, fn item, current_acc ->
         v1 = item_v1(item)
@@ -322,7 +356,18 @@ defmodule Celixir.Compiler.Runtime do
     result_f.(env, final_acc)
   end
 
-  defp run_comprehension_items(env, items, _iter_var, _iter_var2, _acc_var, _acc_init, _loop_cond_f, _loop_step_f, result_f, {:collect_list, transform_f, filter_f}) do
+  defp run_comprehension_items(
+         env,
+         items,
+         _iter_var,
+         _iter_var2,
+         _acc_var,
+         _acc_init,
+         _loop_cond_f,
+         _loop_step_f,
+         result_f,
+         {:collect_list, transform_f, filter_f}
+       ) do
     acc =
       Enum.reduce(items, [], fn item, acc ->
         v1 = item_v1(item)
@@ -338,7 +383,18 @@ defmodule Celixir.Compiler.Runtime do
     result_f.(env, Enum.reverse(acc))
   end
 
-  defp run_comprehension_items(env, items, _iter_var, _iter_var2, _acc_var, acc_init, _loop_cond_f, _loop_step_f, result_f, {:transform_map, transform_f, filter_f}) do
+  defp run_comprehension_items(
+         env,
+         items,
+         _iter_var,
+         _iter_var2,
+         _acc_var,
+         acc_init,
+         _loop_cond_f,
+         _loop_step_f,
+         result_f,
+         {:transform_map, transform_f, filter_f}
+       ) do
     final_acc =
       Enum.reduce(items, acc_init, fn {key, _value} = item, current_acc ->
         v1 = item_v1(item)
@@ -354,7 +410,18 @@ defmodule Celixir.Compiler.Runtime do
     result_f.(env, final_acc)
   end
 
-  defp run_comprehension_items(env, items, _iter_var, _iter_var2, _acc_var, acc_init, _loop_cond_f, _loop_step_f, result_f, {:transform_map_entry, transform_f, filter_f}) do
+  defp run_comprehension_items(
+         env,
+         items,
+         _iter_var,
+         _iter_var2,
+         _acc_var,
+         acc_init,
+         _loop_cond_f,
+         _loop_step_f,
+         result_f,
+         {:transform_map_entry, transform_f, filter_f}
+       ) do
     final_acc =
       Enum.reduce(items, acc_init, fn item, current_acc ->
         v1 = item_v1(item)
@@ -366,9 +433,11 @@ defmodule Celixir.Compiler.Runtime do
           case entry do
             e when is_map(e) and not is_struct(e) and map_size(e) == 1 ->
               [{new_key, new_val}] = Map.to_list(e)
+
               if Map.has_key?(current_acc, new_key) do
                 raise EvalError, message: "transformMapEntry: duplicate key"
               end
+
               Map.put(current_acc, new_key, new_val)
 
             _ ->
@@ -382,7 +451,18 @@ defmodule Celixir.Compiler.Runtime do
     result_f.(env, final_acc)
   end
 
-  defp run_comprehension_items(env, items, _iter_var, _iter_var2, _acc_var, acc_init, _loop_cond_f, _loop_step_f, result_f, {:sort_by, key_f}) do
+  defp run_comprehension_items(
+         env,
+         items,
+         _iter_var,
+         _iter_var2,
+         _acc_var,
+         acc_init,
+         _loop_cond_f,
+         _loop_step_f,
+         result_f,
+         {:sort_by, key_f}
+       ) do
     sorted =
       items
       |> Enum.map(fn {value} = item ->
@@ -403,6 +483,7 @@ defmodule Celixir.Compiler.Runtime do
   def opt_lambda(env, %Optional{has_value: true, value: v}, var, kind, expr_f) do
     inner_env = Environment.put_variable(env, var, v)
     result = expr_f.(inner_env)
+
     case kind do
       :flat_map -> result
       :map -> Optional.of(result)
