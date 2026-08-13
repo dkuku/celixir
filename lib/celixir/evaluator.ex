@@ -8,6 +8,10 @@ defmodule Celixir.Evaluator do
 
   alias Celixir.AST
   alias Celixir.Environment
+  alias Celixir.Ext.Encoders
+  alias Celixir.Ext.Lists
+  alias Celixir.Ext.Math
+  alias Celixir.Ext.Strings
   alias Celixir.Proto
   alias Celixir.Types.Duration
   alias Celixir.Types.Optional
@@ -868,15 +872,13 @@ defmodule Celixir.Evaluator do
   end
 
   defp do_index(target, idx) when is_map(target) do
-    cond do
-      Map.has_key?(target, idx) ->
-        normalize(Map.get(target, idx))
-
-      true ->
-        case map_find_key(target, idx) do
-          {:ok, matched_key} -> normalize(Map.get(target, matched_key))
-          :error -> cel_error("key #{inspect(idx)} not found in map")
-        end
+    if Map.has_key?(target, idx) do
+      normalize(Map.get(target, idx))
+    else
+      case map_find_key(target, idx) do
+        {:ok, matched_key} -> normalize(Map.get(target, matched_key))
+        :error -> cel_error("key #{inspect(idx)} not found in map")
+      end
     end
   end
 
@@ -1601,17 +1603,13 @@ defmodule Celixir.Evaluator do
   defp call_builtin("dyn", [arg], _env), do: arg
   defp call_builtin("has", _args, _env), do: cel_error("has() macro was not properly expanded")
 
-  defp call_builtin("math.least", [arg], _env) when is_list(arg),
-    do: Celixir.Ext.Math.math_least(arg)
+  defp call_builtin("math.least", [arg], _env) when is_list(arg), do: Math.math_least(arg)
 
-  defp call_builtin("math.least", args, _env) when length(args) >= 1,
-    do: Celixir.Ext.Math.math_least(args)
+  defp call_builtin("math.least", args, _env) when length(args) >= 1, do: Math.math_least(args)
 
-  defp call_builtin("math.greatest", [arg], _env) when is_list(arg),
-    do: Celixir.Ext.Math.math_greatest(arg)
+  defp call_builtin("math.greatest", [arg], _env) when is_list(arg), do: Math.math_greatest(arg)
 
-  defp call_builtin("math.greatest", args, _env) when length(args) >= 1,
-    do: Celixir.Ext.Math.math_greatest(args)
+  defp call_builtin("math.greatest", args, _env) when length(args) >= 1, do: Math.math_greatest(args)
 
   # Optional support
   defp call_builtin("optional.of", [arg], _env), do: Optional.of(arg)
@@ -1627,74 +1625,67 @@ defmodule Celixir.Evaluator do
   end
 
   # Encoding extensions — delegate to Celixir.Ext.Encoders
-  defp call_builtin("base64.encode", [v], _env) when is_binary(v), do: Celixir.Ext.Encoders.encode(v)
-  defp call_builtin("base64.decode", [v], _env) when is_binary(v), do: Celixir.Ext.Encoders.decode(v)
+  defp call_builtin("base64.encode", [v], _env) when is_binary(v), do: Encoders.encode(v)
+  defp call_builtin("base64.decode", [v], _env) when is_binary(v), do: Encoders.decode(v)
 
   # Math extensions — delegate to Celixir.Ext.Math
   defp call_builtin("math.ceil", [v], _env) when is_float(v) or v in [:infinity, :neg_infinity, :nan],
-    do: Celixir.Ext.Math.math_ceil(v)
+    do: Math.math_ceil(v)
 
   defp call_builtin("math.floor", [v], _env) when is_float(v) or v in [:infinity, :neg_infinity, :nan],
-    do: Celixir.Ext.Math.math_floor(v)
+    do: Math.math_floor(v)
 
   defp call_builtin("math.round", [v], _env) when is_float(v) or v in [:infinity, :neg_infinity, :nan],
-    do: Celixir.Ext.Math.math_round(v)
+    do: Math.math_round(v)
 
   defp call_builtin("math.trunc", [v], _env) when is_float(v) or v in [:infinity, :neg_infinity, :nan],
-    do: Celixir.Ext.Math.math_trunc(v)
+    do: Math.math_trunc(v)
 
-  defp call_builtin("math.abs", [v], _env) when is_integer(v), do: Celixir.Ext.Math.math_abs(v)
-  defp call_builtin("math.abs", [v], _env) when is_float(v) or v in [:infinity, :neg_infinity, :nan],
-    do: Celixir.Ext.Math.math_abs(v)
+  defp call_builtin("math.abs", [v], _env) when is_integer(v), do: Math.math_abs(v)
+  defp call_builtin("math.abs", [v], _env) when is_float(v) or v in [:infinity, :neg_infinity, :nan], do: Math.math_abs(v)
 
-  defp call_builtin("math.sign", [v], _env) when is_integer(v),
-    do: Celixir.Ext.Math.math_sign(v)
+  defp call_builtin("math.sign", [v], _env) when is_integer(v), do: Math.math_sign(v)
 
-  defp call_builtin("math.sign", [v], _env) when is_float(v),
-    do: Celixir.Ext.Math.math_sign(v)
+  defp call_builtin("math.sign", [v], _env) when is_float(v), do: Math.math_sign(v)
 
   defp call_builtin("math.isNaN", [v], _env) when is_float(v) or v in [:nan, :infinity, :neg_infinity],
-    do: Celixir.Ext.Math.math_is_nan(v)
+    do: Math.math_is_nan(v)
 
   defp call_builtin("math.isInf", [v], _env) when is_float(v) or v in [:nan, :infinity, :neg_infinity],
-    do: Celixir.Ext.Math.math_is_inf(v)
+    do: Math.math_is_inf(v)
 
   defp call_builtin("math.isFinite", [v], _env) when is_float(v) or v in [:nan, :infinity, :neg_infinity],
-    do: Celixir.Ext.Math.math_is_finite(v)
+    do: Math.math_is_finite(v)
 
   # Math bit operations — delegate to Celixir.Ext.Math
-  defp call_builtin("math.bitAnd", [a, b], _env) when is_integer(a) and is_integer(b),
-    do: Celixir.Ext.Math.math_bit_and(a, b)
+  defp call_builtin("math.bitAnd", [a, b], _env) when is_integer(a) and is_integer(b), do: Math.math_bit_and(a, b)
 
-  defp call_builtin("math.bitOr", [a, b], _env) when is_integer(a) and is_integer(b),
-    do: Celixir.Ext.Math.math_bit_or(a, b)
+  defp call_builtin("math.bitOr", [a, b], _env) when is_integer(a) and is_integer(b), do: Math.math_bit_or(a, b)
 
-  defp call_builtin("math.bitXor", [a, b], _env) when is_integer(a) and is_integer(b),
-    do: Celixir.Ext.Math.math_bit_xor(a, b)
+  defp call_builtin("math.bitXor", [a, b], _env) when is_integer(a) and is_integer(b), do: Math.math_bit_xor(a, b)
 
-  defp call_builtin("math.bitNot", [a], _env) when is_integer(a),
-    do: Celixir.Ext.Math.math_bit_not(a)
+  defp call_builtin("math.bitNot", [a], _env) when is_integer(a), do: Math.math_bit_not(a)
 
   defp call_builtin("math.bitShiftLeft", [_a, b], _env) when is_integer(b) and b < 0,
     do: cel_error("math.bitShiftLeft: negative shift")
 
   defp call_builtin("math.bitShiftLeft", [a, b], _env) when is_integer(a) and is_integer(b),
-    do: int64_from_bits(Celixir.Ext.Math.math_bit_shift_left(a, b))
+    do: int64_from_bits(Math.math_bit_shift_left(a, b))
 
   defp call_builtin("math.bitShiftRight", [_a, b], _env) when is_integer(b) and b < 0,
     do: cel_error("math.bitShiftRight: negative shift")
 
   defp call_builtin("math.bitShiftRight", [a, b], _env) when is_integer(a) and is_integer(b),
-    do: int64_from_bits(Celixir.Ext.Math.math_bit_shift_right(a, b))
+    do: int64_from_bits(Math.math_bit_shift_right(a, b))
 
-  defp call_builtin("math.sqrt", [v], _env) when is_integer(v), do: Celixir.Ext.Math.math_sqrt(v)
+  defp call_builtin("math.sqrt", [v], _env) when is_integer(v), do: Math.math_sqrt(v)
 
   defp call_builtin("math.sqrt", [v], _env) when is_float(v) or v in [:nan, :infinity, :neg_infinity],
-    do: Celixir.Ext.Math.math_sqrt(v)
+    do: Math.math_sqrt(v)
 
   # Lists extensions — delegate to Celixir.Ext.Lists
   defp call_builtin("lists.range", [n], _env) when is_integer(n) do
-    Celixir.Ext.Lists.range(n)
+    Lists.range(n)
   end
 
   # Sets extensions — keep cel_equal? for cross-type correctness (int/uint/double equality)
@@ -1712,24 +1703,21 @@ defmodule Celixir.Evaluator do
   end
 
   # String extension: strings.quote(s) — delegate to Celixir.Ext.Strings
-  defp call_builtin("strings.quote", [s], _env) when is_binary(s),
-    do: Celixir.Ext.Strings.quote_string(s)
+  defp call_builtin("strings.quote", [s], _env) when is_binary(s), do: Strings.quote_string(s)
 
   # Regex extensions — delegate to Celixir.Ext.Regex
   defp call_builtin("regex.replace", [target, pattern, replacement], _env)
        when is_binary(target) and is_binary(pattern) and is_binary(replacement),
-    do: Celixir.Ext.Regex.replace(target, pattern, replacement)
+       do: Celixir.Ext.Regex.replace(target, pattern, replacement)
 
   defp call_builtin("regex.replace", [target, pattern, replacement, count], _env)
        when is_binary(target) and is_binary(pattern) and is_binary(replacement) and is_integer(count),
-    do: Celixir.Ext.Regex.replace(target, pattern, replacement, count)
+       do: Celixir.Ext.Regex.replace(target, pattern, replacement, count)
 
-  defp call_builtin("regex.extract", [target, pattern], _env)
-       when is_binary(target) and is_binary(pattern),
+  defp call_builtin("regex.extract", [target, pattern], _env) when is_binary(target) and is_binary(pattern),
     do: Celixir.Ext.Regex.extract(target, pattern)
 
-  defp call_builtin("regex.extractAll", [target, pattern], _env)
-       when is_binary(target) and is_binary(pattern),
+  defp call_builtin("regex.extractAll", [target, pattern], _env) when is_binary(target) and is_binary(pattern),
     do: Celixir.Ext.Regex.extract_all(target, pattern)
 
   # --- Network extension: ip(), cidr(), isIP(), ip.isCanonical() ---
@@ -1866,7 +1854,8 @@ defmodule Celixir.Evaluator do
     end
   end
 
-  defp call_method_builtin("indexOf", target, [substr, offset], _env) when is_binary(target) and is_binary(substr) and is_integer(offset) do
+  defp call_method_builtin("indexOf", target, [substr, offset], _env)
+       when is_binary(target) and is_binary(substr) and is_integer(offset) do
     len = String.length(target)
 
     cond do
@@ -1923,8 +1912,7 @@ defmodule Celixir.Evaluator do
   end
 
   # String extension: s.quote() — receiver method form
-  defp call_method_builtin("quote", target, [], _env) when is_binary(target),
-    do: Celixir.Ext.Strings.quote_string(target)
+  defp call_method_builtin("quote", target, [], _env) when is_binary(target), do: Strings.quote_string(target)
 
   defp call_method_builtin("lowerAscii", target, [], _env) when is_binary(target), do: String.downcase(target, :ascii)
 
@@ -1943,9 +1931,11 @@ defmodule Celixir.Evaluator do
         |> apply_replace_n(old, new_str, count - 1)
   end
 
-  defp call_method_builtin("split", target, [sep], _env) when is_binary(target) and is_binary(sep), do: String.split(target, sep)
+  defp call_method_builtin("split", target, [sep], _env) when is_binary(target) and is_binary(sep),
+    do: String.split(target, sep)
 
-  defp call_method_builtin("split", target, [sep, limit], _env) when is_binary(target) and is_binary(sep) and is_integer(limit) do
+  defp call_method_builtin("split", target, [sep, limit], _env)
+       when is_binary(target) and is_binary(sep) and is_integer(limit) do
     cond do
       limit < 0 -> String.split(target, sep)
       limit == 0 -> []
@@ -1963,7 +1953,8 @@ defmodule Celixir.Evaluator do
     end
   end
 
-  defp call_method_builtin("substring", target, [start, stop], _env) when is_binary(target) and is_integer(start) and is_integer(stop) do
+  defp call_method_builtin("substring", target, [start, stop], _env)
+       when is_binary(target) and is_integer(start) and is_integer(stop) do
     len = String.length(target)
 
     cond do
@@ -2001,7 +1992,8 @@ defmodule Celixir.Evaluator do
     Enum.sort(target, &cel_lte?/2)
   end
 
-  defp call_method_builtin("slice", target, [start, count], _env) when is_list(target) and is_integer(start) and is_integer(count) do
+  defp call_method_builtin("slice", target, [start, count], _env)
+       when is_list(target) and is_integer(start) and is_integer(count) do
     Enum.slice(target, start, count)
   end
 
@@ -2010,16 +2002,13 @@ defmodule Celixir.Evaluator do
   end
 
   defp call_method_builtin("flatten", target, [depth], _env) when is_list(target) and is_integer(depth),
-    do: Celixir.Ext.Lists.flatten(target, depth)
+    do: Lists.flatten(target, depth)
 
-  defp call_method_builtin("distinct", target, [], _env) when is_list(target),
-    do: Celixir.Ext.Lists.distinct(target)
+  defp call_method_builtin("distinct", target, [], _env) when is_list(target), do: Lists.distinct(target)
 
-  defp call_method_builtin("first", target, [], _env) when is_list(target),
-    do: Celixir.Ext.Lists.first(target)
+  defp call_method_builtin("first", target, [], _env) when is_list(target), do: Lists.first(target)
 
-  defp call_method_builtin("last", target, [], _env) when is_list(target),
-    do: Celixir.Ext.Lists.last(target)
+  defp call_method_builtin("last", target, [], _env) when is_list(target), do: Lists.last(target)
 
   # String extension: format
   defp call_method_builtin("format", target, [args], _env) when is_binary(target) and is_list(args) do
@@ -2779,5 +2768,4 @@ defmodule Celixir.Evaluator do
       :error -> :not_var
     end
   end
-
 end

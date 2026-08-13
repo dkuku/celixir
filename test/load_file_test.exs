@@ -48,6 +48,7 @@ defmodule Celixir.LoadFileTest do
 
     test "raises on invalid expression", %{path: path} do
       File.write!(path, "+++invalid")
+
       assert_raise Celixir.Error, fn ->
         Celixir.load_file!(path)
       end

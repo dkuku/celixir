@@ -765,11 +765,7 @@ defmodule Celixir.Parser do
   end
 
   # transformMapEntry(var1, var2, transform)
-  defp expand_comprehension("transformMapEntry", iter_range, [
-         %AST.Ident{name: var1},
-         %AST.Ident{name: var2},
-         transform
-       ]) do
+  defp expand_comprehension("transformMapEntry", iter_range, [%AST.Ident{name: var1}, %AST.Ident{name: var2}, transform]) do
     {:ok,
      %AST.Comprehension{
        iter_var: var1,

@@ -26,7 +26,7 @@ defmodule CelixirExtTest do
 
   describe "Celixir.Ext.Math.register/1" do
     test "all math functions work after registration" do
-      env = Celixir.Environment.new() |> Math.register()
+      env = Math.register(Celixir.Environment.new())
       assert Celixir.eval!("math.sqrt(16.0)", env) == 4.0
       assert Celixir.eval!("math.ceil(1.1)", env) == 2.0
       assert Celixir.eval!("math.floor(1.9)", env) == 1.0
@@ -76,7 +76,7 @@ defmodule CelixirExtTest do
 
   describe "Celixir.Ext.Strings.register/1" do
     test "strings.quote works after registration" do
-      env = Celixir.Environment.new() |> Strings.register()
+      env = Strings.register(Celixir.Environment.new())
       assert Celixir.eval!(~s|strings.quote("hello")|, env) == ~s("hello")
     end
   end
@@ -106,7 +106,7 @@ defmodule CelixirExtTest do
 
   describe "Celixir.Ext.Lists.register/1" do
     test "functions work after registration" do
-      env = Celixir.Environment.new() |> Lists.register()
+      env = Lists.register(Celixir.Environment.new())
       assert Celixir.eval!("lists.range(3)", env) == [0, 1, 2]
       assert Celixir.eval!("[1, 2, 2].distinct()", env) == [1, 2]
       assert Celixir.eval!("[1, 2, 3].first().value()", env) == 1
@@ -280,7 +280,7 @@ defmodule CelixirExtTest do
 
   describe "Celixir.Ext.Sets.register/1" do
     test "functions work after registration" do
-      env = Celixir.Environment.new() |> Sets.register()
+      env = Sets.register(Celixir.Environment.new())
       assert Celixir.eval!("sets.contains([1,2,3],[2,3])", env) == true
       assert Celixir.eval!("sets.equivalent([1,2],[2,1])", env) == true
       assert Celixir.eval!("sets.intersects([1,2],[2,3])", env) == true
@@ -349,7 +349,7 @@ defmodule CelixirExtTest do
 
   describe "Celixir.Ext.Encoders.register/1" do
     test "base64 functions work after registration" do
-      env = Celixir.Environment.new() |> Encoders.register()
+      env = Encoders.register(Celixir.Environment.new())
       assert Celixir.eval!(~s|base64.encode("hello")|, env) == "aGVsbG8="
     end
   end
@@ -386,7 +386,7 @@ defmodule CelixirExtTest do
 
   describe "Celixir.Ext.Regex.register/1" do
     test "register is a no-op (built-ins always available)" do
-      env = Celixir.Environment.new() |> CelRegex.register()
+      env = CelRegex.register(Celixir.Environment.new())
       assert Celixir.eval!(~s|regex.replace("hello", "hello", "hi")|, env) == "hi"
     end
   end

@@ -34,9 +34,9 @@ defmodule Celixir.Ext.Math do
 
   import Bitwise, only: [band: 2, bor: 2, bxor: 2, bnot: 1, bsl: 2, bsr: 2]
 
-  @uint64_max 18_446_744_073_709_551_615
-
   alias Celixir.Environment
+
+  @uint64_max 18_446_744_073_709_551_615
 
   @doc """
   Registers math extension functions into the given environment.

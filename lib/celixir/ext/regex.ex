@@ -55,8 +55,7 @@ defmodule Celixir.Ext.Regex do
 
   @doc "Replace matches of `pattern` in `target` with `replacement`. count=-1 replaces all."
   def replace(target, pattern, replacement, count \\ -1)
-      when is_binary(target) and is_binary(pattern) and is_binary(replacement) and
-             is_integer(count) do
+      when is_binary(target) and is_binary(pattern) and is_binary(replacement) and is_integer(count) do
     with :ok <- validate_replacement(replacement),
          {:ok, regex} <- Elixir.Regex.compile(pattern) do
       do_replace(target, regex, replacement, count)
@@ -92,10 +91,10 @@ defmodule Celixir.Ext.Regex do
           raise "regex.extractAll: multiple capture groups not allowed"
 
         n == 1 ->
-          Elixir.Regex.scan(regex, target) |> Enum.map(fn [_, group] -> group end)
+          regex |> Elixir.Regex.scan(target) |> Enum.map(fn [_, group] -> group end)
 
         true ->
-          Elixir.Regex.scan(regex, target) |> Enum.map(fn [full] -> full end)
+          regex |> Elixir.Regex.scan(target) |> Enum.map(fn [full] -> full end)
       end
     else
       {:error, msg} -> raise msg

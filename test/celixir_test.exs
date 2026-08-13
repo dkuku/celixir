@@ -1,10 +1,10 @@
 defmodule CelixirTest do
   use ExUnit.Case
 
-  doctest Celixir
-
   alias Celixir.Types.Duration
   alias Celixir.Types.Timestamp
+
+  doctest Celixir
 
   describe "literals" do
     test "integers" do

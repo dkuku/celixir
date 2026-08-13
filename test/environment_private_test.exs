@@ -5,7 +5,7 @@ defmodule Celixir.EnvironmentPrivateTest do
 
   describe "put_private/3 and get_private/2" do
     test "stores and retrieves a value" do
-      env = Environment.new() |> Environment.put_private(:key, "value")
+      env = Environment.put_private(Environment.new(), :key, "value")
       assert {:ok, "value"} = Environment.get_private(env, :key)
     end
 
@@ -15,7 +15,7 @@ defmodule Celixir.EnvironmentPrivateTest do
     end
 
     test "supports string keys" do
-      env = Environment.new() |> Environment.put_private("api_key", "secret")
+      env = Environment.put_private(Environment.new(), "api_key", "secret")
       assert {:ok, "secret"} = Environment.get_private(env, "api_key")
     end
 
@@ -41,7 +41,7 @@ defmodule Celixir.EnvironmentPrivateTest do
 
   describe "get_private!/2" do
     test "returns value when key exists" do
-      env = Environment.new() |> Environment.put_private(:key, 42)
+      env = Environment.put_private(Environment.new(), :key, 42)
       assert 42 = Environment.get_private!(env, :key)
     end
 
@@ -62,7 +62,7 @@ defmodule Celixir.EnvironmentPrivateTest do
     end
 
     test "no-op for missing key" do
-      env = Environment.new() |> Environment.delete_private(:nope)
+      env = Environment.delete_private(Environment.new(), :nope)
       assert :error = Environment.get_private(env, :nope)
     end
   end
@@ -70,7 +70,8 @@ defmodule Celixir.EnvironmentPrivateTest do
   describe "private data is not visible to CEL" do
     test "private keys are not accessible as variables" do
       env =
-        Environment.new(%{x: 10})
+        %{x: 10}
+        |> Environment.new()
         |> Environment.put_private(:secret, "hidden")
 
       assert {:ok, 10} = Celixir.eval("x", env)
@@ -80,9 +81,7 @@ defmodule Celixir.EnvironmentPrivateTest do
 
   describe "private data in custom functions" do
     test "custom function can close over env with private data" do
-      env =
-        Environment.new()
-        |> Environment.put_private(:multiplier, 3)
+      env = Environment.put_private(Environment.new(), :multiplier, 3)
 
       multiplier = Environment.get_private!(env, :multiplier)
 

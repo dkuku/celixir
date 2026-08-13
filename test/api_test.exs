@@ -2,6 +2,7 @@ defmodule Celixir.APITest do
   use ExUnit.Case
 
   defmodule MathAPI do
+    @moduledoc false
     use Celixir.API, scope: "mymath"
 
     defcel abs(x) do
@@ -18,6 +19,7 @@ defmodule Celixir.APITest do
   end
 
   defmodule UnscopedAPI do
+    @moduledoc false
     use Celixir.API
 
     defcel greet(name) do
@@ -83,7 +85,8 @@ defmodule Celixir.APITest do
   describe "composing APIs" do
     test "can register multiple APIs on same environment" do
       env =
-        Celixir.Environment.new(%{val: -7})
+        %{val: -7}
+        |> Celixir.Environment.new()
         |> MathAPI.register()
         |> UnscopedAPI.register()
 

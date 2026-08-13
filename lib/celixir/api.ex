@@ -43,6 +43,7 @@ defmodule Celixir.API do
 
     quote do
       import Celixir.API, only: [defcel: 2]
+
       Module.register_attribute(__MODULE__, :cel_functions, accumulate: true)
       @before_compile Celixir.API
       @cel_scope unquote(scope)
