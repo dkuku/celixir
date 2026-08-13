@@ -207,6 +207,44 @@ defmodule Celixir do
 
       {:ok, program} = Celixir.compile("x > threshold")
       Celixir.Program.eval(program, %{x: 100, threshold: 50})
+
+  ## Compile untrusted expressions at your own risk
+
+  Each call generates and loads a uniquely-named BEAM module, costing two
+  permanent atoms and two resident modules — `:"Celixir.Compiled.<n>"` for the
+  generated code, plus an `:elixir_compiler_<n>` wrapper that `Module.create/3`
+  leaves behind. None of it is ever reclaimed: atoms are never garbage collected
+  and the modules stay loaded for the life of the VM, at roughly 7 KiB of code
+  memory per compile. Compiling an unbounded stream of *distinct* expressions
+  will exhaust the atom table (default limit 1,048,576, so ~500k compiles) and
+  crash the node unrecoverably.
+
+  Variable *bindings* are safe — they create no atoms, and identifiers within an
+  expression are mapped to positional atoms bounded by the variable count. It is
+  the number of distinct expression strings compiled that matters.
+
+  If expressions come from users, config reloads, or anything else that can vary
+  without bound, either cache programs by expression text so each string is
+  compiled once:
+
+      program =
+        case :persistent_term.get({:cel, expr}, nil) do
+          nil ->
+            {:ok, p} = Celixir.compile(expr)
+            :persistent_term.put({:cel, expr}, p)
+            p
+
+          p ->
+            p
+        end
+
+  or skip compilation entirely and use `eval/2`, which walks the AST and creates
+  no modules:
+
+      Celixir.eval(untrusted_expr, bindings)
+
+  The same applies to `to_fun/1`, `to_fun!/1`, `load_file/1` and `load_file!/1`,
+  which all compile through this path.
   """
   @spec compile(String.t()) :: {:ok, Celixir.Program.t()} | {:error, String.t()}
   def compile(expression) do
@@ -247,6 +285,10 @@ defmodule Celixir do
 
   The returned function takes a bindings map (or `Celixir.Environment`) and
   returns `{:ok, result}` or `{:error, message}`.
+
+  Like `compile/1`, each call loads a uniquely-named module and creates one
+  permanent atom — see the atom-table note in `compile/1` before calling this
+  with expressions you do not control.
 
   ## Examples
 
