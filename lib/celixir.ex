@@ -214,7 +214,7 @@ defmodule Celixir do
   permanent atoms and two resident modules — `:"Celixir.Compiled.<n>"` for the
   generated code, plus an `:elixir_compiler_<n>` wrapper that `Module.create/3`
   leaves behind. None of it is ever reclaimed: atoms are never garbage collected
-  and the modules stay loaded for the life of the VM, at roughly 7 KiB of code
+  and the modules stay loaded for the life of the VM, at roughly 8 KiB of code
   memory per compile. Compiling an unbounded stream of *distinct* expressions
   will exhaust the atom table (default limit 1,048,576, so ~500k compiles) and
   crash the node unrecoverably.

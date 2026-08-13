@@ -9,7 +9,7 @@ CEL is a non-Turing-complete expression language designed for simplicity, speed,
 ```elixir
 def deps do
   [
-    {:celixir, "~> 0.3.0"}
+    {:celixir, "~> 0.4.0-rc1"}
   ]
 end
 ```
@@ -433,7 +433,7 @@ Optional pre-evaluation type validation:
 
 Celixir passes ~97% of the upstream [cel-spec](https://github.com/google/cel-spec) conformance tests across 30 test suites covering arithmetic, strings, lists, comparisons, logic, macros, conversions, timestamps, protobuf field access, namespaces, optionals, type deductions, and more.
 
-Known intentional deviations (v0.3.0): integer overflow is not enforced (Elixir bigints are used), `type(1u)` returns `:int`, and `type(b"hi")` returns `:string` — the uint and bytes distinction is dropped in favour of native Elixir types.
+Known intentional deviations (v0.4.0): integer overflow is not enforced (Elixir bigints are used), `type(1u)` returns `:int`, and `type(b"hi")` returns `:string` — the uint and bytes distinction is dropped in favour of native Elixir types.
 
 The extension modules (`Celixir.Ext.*`) mirror the `ext.*` packages from cel-go and are covered by an additional 100+ tests.
 
