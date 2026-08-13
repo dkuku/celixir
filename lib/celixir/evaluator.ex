@@ -808,8 +808,10 @@ defmodule Celixir.Evaluator do
   # Repeated and map fields never reach here — select_test/3 handles them before this check.
   defp proto3_default_value?(nil), do: true
   defp proto3_default_value?(0), do: true
-  defp proto3_default_value?(+0.0), do: true
-  defp proto3_default_value?(-0.0), do: true
+  # Guard rather than +0.0/-0.0 clauses: OTP 26 matches the two patterns
+  # identically and warns the second is unreachable, while OTP 27 onwards
+  # distinguishes them. `f == 0.0` is true for both signs on every version.
+  defp proto3_default_value?(f) when is_float(f) and f == 0.0, do: true
   defp proto3_default_value?(false), do: true
   defp proto3_default_value?(""), do: true
   defp proto3_default_value?(_), do: false
