@@ -225,7 +225,7 @@ defmodule Celixir.Evaluator do
     with_values(do_eval(left, env), do_eval(right, env), fn l, r ->
       cond do
         is_list(r) -> Enum.any?(r, &cel_equal?(l, &1))
-        is_map(r) -> Enum.any?(Map.keys(r), &cel_equal?(l, &1))
+        is_map(r) -> map_find_key(r, l) != :error
         true -> cel_error("no_matching_overload: 'in' on #{cel_typeof(r)}")
       end
     end)
@@ -1263,12 +1263,17 @@ defmodule Celixir.Evaluator do
   # Fast path: try direct key match first (O(log n)), then fall back to
   # linear scan for cross-type numeric equality (e.g., int key vs uint lookup).
   defp map_find_key(map, target_key) do
-    if Map.has_key?(map, target_key) do
-      {:ok, target_key}
-    else
-      Enum.find_value(Map.keys(map), :error, fn k ->
-        if cel_equal?(k, target_key), do: {:ok, k}
-      end)
+    cond do
+      Map.has_key?(map, target_key) ->
+        {:ok, target_key}
+
+      is_number(target_key) ->
+        Enum.find_value(Map.keys(map), :error, fn k ->
+          if cel_equal?(k, target_key), do: {:ok, k}
+        end)
+
+      true ->
+        :error
     end
   end
 

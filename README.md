@@ -9,7 +9,7 @@ CEL is a non-Turing-complete expression language designed for simplicity, speed,
 ```elixir
 def deps do
   [
-    {:celixir, "~> 0.4.0-rc1"}
+    {:celixir, "~> 0.4.0"}
   ]
 end
 ```
@@ -42,11 +42,10 @@ Celixir.eval!("[1, 2, 3].all(x, x > 0)")        # => true
 
 ## Compile Once, Evaluate Many
 
-`Celixir.compile/1` parses the expression and translates it to a native BEAM
-function via `Module.create/3`. Subsequent calls skip all parsing and AST
-interpretation — only the compiled code runs:
-
-
+`Celixir.compile/2` parses the expression and compiles it into a fast closure
+tree (`strategy: :closure` by default — zero atoms and zero BEAM modules
+created, fully garbage-collected) or an optional BEAM module (`strategy: :module`
+or `jit: true`). Subsequent calls skip all parsing and AST interpretation:
 
 ```elixir
 {:ok, program} = Celixir.compile("user.role == 'admin' && request.method in ['PUT', 'DELETE']")

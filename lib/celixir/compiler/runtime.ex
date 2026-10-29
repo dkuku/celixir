@@ -159,7 +159,8 @@ defmodule Celixir.Compiler.Runtime do
   end
 
   def cel_in(left, right) when is_map(right) do
-    Enum.any?(Map.keys(right), &Celixir.Evaluator.dispatch_equal?(&1, left))
+    Map.has_key?(right, left) or
+      (is_number(left) and Enum.any?(Map.keys(right), &Celixir.Evaluator.dispatch_equal?(&1, left)))
   end
 
   def cel_in(_, right), do: raise(EvalError, message: "no_matching_overload: 'in' on #{cel_typeof(right)}")

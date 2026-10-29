@@ -221,7 +221,17 @@ defmodule Celixir.Checker do
   def infer(%AST.CreateList{elements: elements}, decls) do
     env = normalize_env(decls)
 
-    types = Enum.map(elements, &infer(&1, env))
+    types =
+      Enum.map(elements, fn
+        {:optional_list_elem, expr} ->
+          case infer(expr, env) do
+            {:abstract, "optional_type", [inner]} -> inner
+            other -> other
+          end
+
+        expr ->
+          infer(expr, env)
+      end)
 
     case Enum.find(types, &match?({:error, _}, &1)) do
       {:error, _} = err ->
@@ -240,8 +250,23 @@ defmodule Celixir.Checker do
   def infer(%AST.CreateMap{entries: entries}, decls) do
     env = normalize_env(decls)
 
-    key_types = Enum.map(entries, fn {k, _v} -> infer(k, env) end)
-    val_types = Enum.map(entries, fn {_k, v} -> infer(v, env) end)
+    key_types =
+      Enum.map(entries, fn
+        {:optional, k, _v} -> infer(k, env)
+        {k, _v} -> infer(k, env)
+      end)
+
+    val_types =
+      Enum.map(entries, fn
+        {:optional, _k, v} ->
+          case infer(v, env) do
+            {:abstract, "optional_type", [inner]} -> inner
+            other -> other
+          end
+
+        {_k, v} ->
+          infer(v, env)
+      end)
 
     all_types = key_types ++ val_types
 
@@ -902,7 +927,30 @@ defmodule Celixir.Checker do
     end
   end
 
-  def proto_field_type(_message_type, _field), do: :dyn
+  def proto_field_type(message_type, field) do
+    case Celixir.Proto.get_schema(message_type) do
+      nil -> :dyn
+      schema -> schema |> Map.get(field) |> schema_spec_to_cel_type()
+    end
+  end
+
+  defp schema_spec_to_cel_type(nil), do: :dyn
+  defp schema_spec_to_cel_type(s) when s in [:int32, :int64, :enum], do: :int
+  defp schema_spec_to_cel_type(s) when s in [:uint32, :uint64], do: :uint
+  defp schema_spec_to_cel_type(s) when s in [:float, :double], do: :double
+  defp schema_spec_to_cel_type(:bool), do: :bool
+  defp schema_spec_to_cel_type(:string), do: :string
+  defp schema_spec_to_cel_type(:bytes), do: :bytes
+  defp schema_spec_to_cel_type({:wrapper, s}), do: {:wrapper, schema_spec_to_cel_type(s)}
+  defp schema_spec_to_cel_type({:repeated, s}), do: {:list, schema_spec_to_cel_type(s)}
+  defp schema_spec_to_cel_type({:map, k, v}), do: {:map, schema_spec_to_cel_type(k), schema_spec_to_cel_type(v)}
+  defp schema_spec_to_cel_type({:message, "google.protobuf.Timestamp"}), do: {:well_known, :timestamp}
+  defp schema_spec_to_cel_type({:message, "google.protobuf.Duration"}), do: {:well_known, :duration}
+  defp schema_spec_to_cel_type({:message, "google.protobuf.Any"}), do: :dyn
+  defp schema_spec_to_cel_type({:message, "google.protobuf.Value"}), do: :dyn
+  defp schema_spec_to_cel_type({:message, "google.protobuf.Struct"}), do: {:map, :string, :dyn}
+  defp schema_spec_to_cel_type({:message, "google.protobuf.ListValue"}), do: {:list, :dyn}
+  defp schema_spec_to_cel_type({:message, m}), do: {:message, m}
 
   # ---------------------------------------------------------------------------
   # Private helpers

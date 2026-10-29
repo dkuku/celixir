@@ -2,6 +2,7 @@ defmodule Celixir.EnvironmentAtomTest do
   use ExUnit.Case
 
   alias Celixir.Environment
+  alias Celixir.Proto.Codec
 
   describe "atom values in env bindings" do
     test "top-level atom is converted to string" do
@@ -198,6 +199,82 @@ defmodule Celixir.EnvironmentAtomTest do
       items = Enum.to_list(1..30_000)
       assert {:ok, result} = Celixir.eval("items.filter(x, x > 0)", %{"items" => items})
       assert length(result) == 30_000
+    end
+  end
+
+  describe "compiler and proto codec do not leak atoms" do
+    test "default :closure compilation creates zero new atoms for dynamic expressions and variables" do
+      # Warm up parser/compiler modules first so module-load atoms don't skew the count
+      {:ok, warmup} = Celixir.compile("a + b == 2")
+      assert {:ok, true} = Celixir.Program.eval(warmup, %{"a" => 1, "b" => 1})
+
+      atoms_before = :erlang.system_info(:atom_count)
+
+      for i <- 1..50 do
+        var_a = "dyn_var_alpha_#{i}_#{System.unique_integer([:positive])}"
+        var_b = "dyn_var_beta_#{i}_#{System.unique_integer([:positive])}"
+        expr = "#{var_a} + #{var_b} == #{i * 2}"
+
+        {:ok, prog} = Celixir.compile(expr)
+        assert {:ok, true} = Celixir.Program.eval(prog, %{var_a => i, var_b => i})
+        assert catch_error(String.to_existing_atom(var_a))
+        assert catch_error(String.to_existing_atom(var_b))
+      end
+
+      atoms_after = :erlang.system_info(:atom_count)
+      assert atoms_after == atoms_before
+    end
+
+    test "strategy: :module (jit: true) works and does not intern variable names as atoms" do
+      var_a = "jit_var_alpha_#{System.unique_integer([:positive])}"
+      var_b = "jit_var_beta_#{System.unique_integer([:positive])}"
+      var_z = "jit_iter_#{System.unique_integer([:positive])}"
+
+      {:ok, prog} =
+        Celixir.compile(
+          "#{var_a} * #{var_b} + ([1, 2, 3].all(#{var_z}, #{var_z} > 0) ? 1 : 0)",
+          jit: true
+        )
+
+      assert {:ok, 7} = Celixir.Program.eval(prog, %{var_a => 2, var_b => 3})
+
+      # Variable names and comprehension iterator names are never turned into atoms
+      assert catch_error(String.to_existing_atom(var_a))
+      assert catch_error(String.to_existing_atom(var_b))
+      assert catch_error(String.to_existing_atom(var_z))
+    end
+
+    test "nested comprehensions preserve outer iteration variables in both strategies" do
+      expr = "[1, 2].map(x, [10, 20].map(y, x + y))"
+      {:ok, closure_prog} = Celixir.compile(expr, strategy: :closure)
+      {:ok, module_prog} = Celixir.compile(expr, strategy: :module)
+
+      assert {:ok, [[11, 21], [12, 22]]} = Celixir.Program.eval(closure_prog)
+      assert {:ok, [[11, 21], [12, 22]]} = Celixir.Program.eval(module_prog)
+    end
+
+    test "Proto.Codec.resolve_module does not leak atoms for unknown type names" do
+      _ = Codec.resolve_module("google.protobuf.Timestamp")
+      atoms_before = :erlang.system_info(:atom_count)
+
+      for i <- 1..50 do
+        unknown = "unknown.pkg_#{i}_#{System.unique_integer([:positive])}.Msg"
+        assert nil == Codec.resolve_module(unknown)
+      end
+
+      assert :erlang.system_info(:atom_count) == atoms_before
+    end
+  end
+
+  describe "checker optional literals" do
+    test "type-checks optional list elements and map entries without FunctionClauseError" do
+      {:ok, list_ast} = Celixir.parse("[1, ?optional.of(2)]")
+      assert :ok = Celixir.Checker.check(list_ast)
+      assert {:list, :int} = Celixir.Checker.infer(list_ast)
+
+      {:ok, map_ast} = Celixir.parse(~s|{"a": 1, ?"b": optional.of(2)}|)
+      assert :ok = Celixir.Checker.check(map_ast)
+      assert {:map, :string, :int} = Celixir.Checker.infer(map_ast)
     end
   end
 end

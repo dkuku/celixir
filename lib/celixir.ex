@@ -208,73 +208,58 @@ defmodule Celixir do
       {:ok, program} = Celixir.compile("x > threshold")
       Celixir.Program.eval(program, %{x: 100, threshold: 50})
 
-  ## Compile untrusted expressions at your own risk
+  ## Compilation strategies and atom safety
 
-  Each call generates and loads a uniquely-named BEAM module, costing two
-  permanent atoms and two resident modules — `:"Celixir.Compiled.<n>"` for the
-  generated code, plus an `:elixir_compiler_<n>` wrapper that `Module.create/3`
-  leaves behind. None of it is ever reclaimed: atoms are never garbage collected
-  and the modules stay loaded for the life of the VM, at roughly 8 KiB of code
-  memory per compile. Compiling an unbounded stream of *distinct* expressions
-  will exhaust the atom table (default limit 1,048,576, so ~500k compiles) and
-  crash the node unrecoverably.
+  By default (`strategy: :closure`), `compile/2` compiles the AST into a tree of
+  native closures. This creates **zero atoms** and **zero BEAM modules** at
+  runtime, and the compiled `Celixir.Program` is garbage-collected normally when
+  no longer referenced — making it safe to compile untrusted or dynamically
+  generated expressions.
 
-  Variable *bindings* are safe — they create no atoms, and identifiers within an
-  expression are mapped to positional atoms bounded by the variable count. It is
-  the number of distinct expression strings compiled that matters.
+  For fixed, trusted expressions that are evaluated in tight loops, you can opt
+  into BEAM module generation via `strategy: :module` (or `jit: true`):
 
-  If expressions come from users, config reloads, or anything else that can vary
-  without bound, either cache programs by expression text so each string is
-  compiled once:
+      {:ok, program} = Celixir.compile("x * 2 + y", strategy: :module)
+      # or:
+      {:ok, program} = Celixir.compile("x * 2 + y", jit: true)
 
-      program =
-        case :persistent_term.get({:cel, expr}, nil) do
-          nil ->
-            {:ok, p} = Celixir.compile(expr)
-            :persistent_term.put({:cel, expr}, p)
-            p
-
-          p ->
-            p
-        end
-
-  or skip compilation entirely and use `eval/2`, which walks the AST and creates
-  no modules:
-
-      Celixir.eval(untrusted_expr, bindings)
-
-  The same applies to `to_fun/1`, `to_fun!/1`, `load_file/1` and `load_file!/1`,
-  which all compile through this path.
+  Each `:module` compilation generates and loads a uniquely-named BEAM module,
+  costing two permanent atoms (`:"Celixir.Compiled.<n>"` and `:elixir_compiler_<n>`)
+  and ~8 KiB of resident code memory that is never garbage-collected. Do not use
+  `strategy: :module` / `jit: true` on an unbounded stream of distinct untrusted
+  expressions without caching.
   """
-  @spec compile(String.t()) :: {:ok, Celixir.Program.t()} | {:error, String.t()}
-  def compile(expression) do
+  @spec compile(String.t(), keyword()) :: {:ok, Celixir.Program.t()} | {:error, String.t()}
+  def compile(expression, opts \\ []) do
     with {:ok, ast} <- parse(expression) do
-      {:ok, Celixir.Program.new(ast, expression)}
+      {:ok, Celixir.Program.new(ast, expression, opts)}
     end
   end
 
   @doc """
   Loads a CEL expression from a file and compiles it into a `Celixir.Program`.
 
+  Accepts the same options as `compile/2` (e.g. `strategy: :module` or `jit: true`).
+
   ## Examples
 
       {:ok, program} = Celixir.load_file("path/to/rule.cel")
       Celixir.Program.eval(program, %{x: 42})
   """
-  @spec load_file(String.t()) :: {:ok, Celixir.Program.t()} | {:error, String.t()}
-  def load_file(path) do
+  @spec load_file(String.t(), keyword()) :: {:ok, Celixir.Program.t()} | {:error, String.t()}
+  def load_file(path, opts \\ []) do
     case File.read(path) do
-      {:ok, contents} -> compile(String.trim(contents))
+      {:ok, contents} -> compile(String.trim(contents), opts)
       {:error, reason} -> {:error, "failed to read #{path}: #{:file.format_error(reason)}"}
     end
   end
 
   @doc """
-  Like `load_file/1` but raises on error.
+  Like `load_file/2` but raises on error.
   """
-  @spec load_file!(String.t()) :: Celixir.Program.t()
-  def load_file!(path) do
-    case load_file(path) do
+  @spec load_file!(String.t(), keyword()) :: Celixir.Program.t()
+  def load_file!(path, opts \\ []) do
+    case load_file(path, opts) do
       {:ok, program} -> program
       {:error, msg} -> raise Celixir.Error, message: msg
     end
@@ -286,9 +271,9 @@ defmodule Celixir do
   The returned function takes a bindings map (or `Celixir.Environment`) and
   returns `{:ok, result}` or `{:error, message}`.
 
-  Like `compile/1`, each call loads a uniquely-named module and creates one
-  permanent atom — see the atom-table note in `compile/1` before calling this
-  with expressions you do not control.
+  By default (`strategy: :closure`), creates no atoms or modules. Pass
+  `strategy: :module` (or `jit: true`) to compile a BEAM module — see the note
+  in `compile/2` before using `:module` with untrusted expressions.
 
   ## Examples
 
@@ -300,10 +285,10 @@ defmodule Celixir do
       iex> fun.(%{name: "hello world"})
       {:ok, true}
   """
-  @spec to_fun(String.t()) :: {:ok, (map() -> {:ok, any()} | {:error, String.t()})} | {:error, String.t()}
-  def to_fun(expression) do
+  @spec to_fun(String.t(), keyword()) :: {:ok, (map() -> {:ok, any()} | {:error, String.t()})} | {:error, String.t()}
+  def to_fun(expression, opts \\ []) do
     with {:ok, ast} <- parse(expression),
-         {:ok, compiled_fun} <- Celixir.Compiler.compile(ast) do
+         {:ok, compiled_fun} <- Celixir.Compiler.compile(ast, opts) do
       fun = fn bindings ->
         env =
           case bindings do
@@ -321,7 +306,7 @@ defmodule Celixir do
   end
 
   @doc """
-  Like `to_fun/1` but raises on parse error.
+  Like `to_fun/2` but raises on parse error.
 
   ## Examples
 
@@ -329,9 +314,9 @@ defmodule Celixir do
       iex> fun.(%{x: 10})
       {:ok, 11}
   """
-  @spec to_fun!(String.t()) :: (map() -> {:ok, any()} | {:error, String.t()})
-  def to_fun!(expression) do
-    case to_fun(expression) do
+  @spec to_fun!(String.t(), keyword()) :: (map() -> {:ok, any()} | {:error, String.t()})
+  def to_fun!(expression, opts \\ []) do
+    case to_fun(expression, opts) do
       {:ok, fun} -> fun
       {:error, msg} -> raise Celixir.Error, message: "CEL compilation error: #{msg}"
     end

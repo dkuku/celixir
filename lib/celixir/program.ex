@@ -19,9 +19,9 @@ defmodule Celixir.Program do
         }
 
   @doc "Creates a program from a parsed AST, compiling to a native function."
-  def new(ast, source \\ "<compiled>") do
+  def new(ast, source \\ "<compiled>", opts \\ []) do
     fun =
-      case Celixir.Compiler.compile(ast) do
+      case Celixir.Compiler.compile(ast, opts) do
         {:ok, f} -> f
         {:error, _} -> nil
       end

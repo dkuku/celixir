@@ -120,7 +120,7 @@ if Code.ensure_loaded?(Protobuf) do
         type_name
         |> String.split(".")
         |> Enum.map_join(".", &Macro.camelize/1)
-        |> then(&Module.concat([String.to_atom(&1)]))
+        |> then(&Module.safe_concat([&1]))
 
       if Code.ensure_loaded?(module) and function_exported?(module, :__message_props__, 0) do
         module

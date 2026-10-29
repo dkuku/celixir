@@ -1,25 +1,27 @@
 # Changelog
 
-## v0.4.0-rc1 (2026-08-13)
+## v0.4.0 (2026-10-29)
 
 ### Security
 
+- **Compiling expressions no longer creates atoms or BEAM modules by default.** `Celixir.compile/2`, `Celixir.to_fun/2`, and `Celixir.load_file/2` now default to `strategy: :closure` (`jit: false`), which compiles the CEL AST into a specialized tree of native closures. Compiling and evaluating an unbounded stream of distinct untrusted expressions creates **0 atoms** and **0 resident BEAM modules**, and compiled `%Celixir.Program{}` structs are garbage-collected normally when no longer referenced.
+  - For static, compile-once rules where maximum throughput is desired, pass `strategy: :module` (or `jit: true`) to compile the expression into a dedicated BEAM module via `Module.create/3`. Even in `:module` mode, free variables use a pre-allocated pool of positional atoms (`:__cel_var_0__`..`:__cel_var_63__`), so variable and iterator names never intern new atoms.
 - **Variable bindings no longer create atoms.** `Environment` now stores `variables` and `locals` as `%{String.t() => any()}`. Previously every distinct variable key, and every distinct identifier in a compiled expression, was interned with `String.to_atom/1` — so binding untrusted data (JSON payloads, Ecto JSON columns, external APIs) could exhaust the BEAM atom table and crash the VM unrecoverably. Binding 500 attacker-chosen keys created 500 permanent atoms; it now creates none.
-  - The compiler assigns each free variable a positional atom (`:__cel_var_0__`, `:__cel_var_1__`, …) instead of interning the CEL identifier, so the atom count is bounded by variables-per-expression rather than by the variety of identifiers seen.
-
-  Thanks to [@bruce](https://github.com/bruce) for reporting and implementing this ([#6](https://github.com/dkuku/celixir/pull/6)).
-
-  > **Note**
-  > `Celixir.compile/1` still creates one module and one atom per call, so compiling a stream of distinct untrusted *expressions* remains an atom sink. Cache compiled programs by expression text if expressions are user-supplied.
+  - Thanks to [@bruce](https://github.com/bruce) for reporting and implementing the string-keyed `Environment` work ([#6](https://github.com/dkuku/celixir/pull/6)).
+- **`Celixir.Proto.Codec.resolve_module/1` no longer interns unknown type names as atoms.** Resolving untrusted `google.protobuf.Any` `type_url` strings now uses `Module.safe_concat/1` instead of `String.to_atom/1`, returning `nil` without creating atoms when the target module is not loaded.
 
 ### Features
 
+- **Hybrid compilation strategies (`:closure` default and `:module` opt-in).** `Celixir.compile/2`, `Celixir.to_fun/2`, `Celixir.to_fun!/2`, `Celixir.load_file/2`, and `Celixir.load_file!/2` accept `strategy: :closure | :module` (or `jit: boolean()`).
 - **Atoms are encoded to CEL strings at the boundary.** `Environment.new/1`, `put_variable/3` and `put_local/3` now convert atoms to strings, recursing through lists and through both the keys and values of plain maps, so `%{role: :admin}` matches `role == 'admin'`. `nil`, `true`, `false` and the numeric sentinels `:nan`, `:infinity`, `:neg_infinity` are preserved as CEL null/bool/number. Integer and boolean map keys are preserved (CEL map keys are int/uint/bool/string). Structs are left untouched for the type adapter.
 - **`Celixir.encode/1` is now the single definition of that encoding**, and `Environment` delegates to it. Previously the two disagreed: `Celixir.encode(:admin)` returned `:admin` while `Environment.new(%{x: :admin})` stored `"admin"`.
 - **String-keyed maps are a first-class input.** `Celixir.eval("severity == 'high'", %{"severity" => "high"})` works directly, and is now the faster path: a string-keyed map containing nothing that needs encoding is bound as-is, with no key conversion and no rebuild. Atom-keyed maps continue to work.
 - **`:collect_list` comprehension kind** — `filter`/`map` comprehensions build their result with prepend + reverse instead of repeated appends, making them O(n) rather than O(n²).
-- **Compiled path optimizations** — free variables are pattern-matched directly out of the environment struct in the function head and inlined into the body, eliminating a map lookup per reference. Comprehension bodies are compiled to closures taking their arguments positionally.
-- Compiled programs propagate errors by raising `Celixir.EvalError` and rescuing at the top of `eval/1`, rather than threading `{:error, _}` tuples through every intermediate operation.
+- **Performance optimizations:**
+  - `list.distinct()` (`Celixir.Ext.Lists.distinct/1`) now uses `for item <- list, uniq: true, do: item`, reducing time complexity from O(n²) to O(n).
+  - Map membership (`in`) and map key lookup now take an O(1) `Map.has_key?/2` fast path for non-numeric keys, only scanning keys when cross-type numeric equality (`1 == 1.0`) applies.
+  - `regex.extract` and `regex.extractAll` (`Celixir.Ext.Regex`) now compile the regular expression once per call instead of twice.
+  - Compiled programs propagate errors by raising `Celixir.EvalError` and rescuing at the top of `eval/1`, rather than threading `{:error, _}` tuples through every intermediate operation.
 
 ### Breaking changes
 
@@ -29,6 +31,8 @@
 
 ### Fixed
 
+- **Nested comprehensions preserve outer iteration variables.** Expressions like `[1, 2].map(x, [10, 20].map(y, x + y))` in the compiled path previously shadowed outer comprehension slots (`:v1`, `:v2`, `:acc`); outer variables are now flushed to `env.locals` before entering inner loops in both `:closure` and `:module` strategies.
+- **`Celixir.Checker` supports optional list elements and map entries** (`[?opt]`, `{?"k": opt}`) without raising `FunctionClauseError`, and falls back to registered `Celixir.Proto` schemas during protobuf field type inference.
 - **Atom-keyed nested maps answer consistently.** Given `%{p: %{admin: true}}`, `p.admin` resolved but `p['admin']` raised `key "admin" not found in map` and `'admin' in p` returned `false`, because only field access had an atom fallback. Encoding keys at the boundary makes indexing, membership and comprehension agree with field access.
 - **Maps mixing atom and string keys resolve both.** Key normalization short-circuits when the map's first key is already a string, and Erlang orders atoms before binaries only in maps under 32 entries — so past that size a mixed map could iterate a string key first and leave its atom-keyed variables undefined. Whenever the map is rebuilt its keys are now converted too, which costs the uniform string-keyed case nothing.
 

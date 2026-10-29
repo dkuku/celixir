@@ -54,9 +54,7 @@ defmodule Celixir.Ext.Lists do
   def range(n) when is_integer(n), do: Enum.to_list(0..(n - 1))
 
   def distinct(list) when is_list(list) do
-    Enum.reduce(list, [], fn item, acc ->
-      if Enum.member?(acc, item), do: acc, else: acc ++ [item]
-    end)
+    for item <- list, uniq: true, do: item
   end
 
   def first([]), do: Optional.none()

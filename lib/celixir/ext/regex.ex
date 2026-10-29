@@ -66,38 +66,40 @@ defmodule Celixir.Ext.Regex do
 
   @doc "Return optional first match (or first capture group) of `pattern` in `target`."
   def extract(target, pattern) when is_binary(target) and is_binary(pattern) do
-    with {:ok, n} <- count_groups(pattern),
-         {:ok, regex} <- Elixir.Regex.compile(pattern) do
-      if n > 1 do
-        raise "regex.extract: multiple capture groups not allowed"
-      else
-        case Elixir.Regex.run(regex, target) do
-          nil -> Optional.none()
-          [full_match] -> Optional.of(full_match)
-          [_, group] -> Optional.of(group)
+    case compile_and_count_groups(pattern) do
+      {:ok, regex, n} ->
+        if n > 1 do
+          raise "regex.extract: multiple capture groups not allowed"
+        else
+          case Elixir.Regex.run(regex, target) do
+            nil -> Optional.none()
+            [full_match] -> Optional.of(full_match)
+            [_, group] -> Optional.of(group)
+          end
         end
-      end
-    else
-      {:error, msg} -> raise msg
+
+      {:error, msg} ->
+        raise msg
     end
   end
 
   @doc "Return list of all matches (or first capture groups) of `pattern` in `target`."
   def extract_all(target, pattern) when is_binary(target) and is_binary(pattern) do
-    with {:ok, n} <- count_groups(pattern),
-         {:ok, regex} <- Elixir.Regex.compile(pattern) do
-      cond do
-        n > 1 ->
-          raise "regex.extractAll: multiple capture groups not allowed"
+    case compile_and_count_groups(pattern) do
+      {:ok, regex, n} ->
+        cond do
+          n > 1 ->
+            raise "regex.extractAll: multiple capture groups not allowed"
 
-        n == 1 ->
-          regex |> Elixir.Regex.scan(target) |> Enum.map(fn [_, group] -> group end)
+          n == 1 ->
+            regex |> Elixir.Regex.scan(target) |> Enum.map(fn [_, group] -> group end)
 
-        true ->
-          regex |> Elixir.Regex.scan(target) |> Enum.map(fn [full] -> full end)
-      end
-    else
-      {:error, msg} -> raise msg
+          true ->
+            regex |> Elixir.Regex.scan(target) |> Enum.map(fn [full] -> full end)
+        end
+
+      {:error, msg} ->
+        raise msg
     end
   end
 
@@ -155,10 +157,10 @@ defmodule Celixir.Ext.Regex do
   defp format_error({msg, _}) when is_list(msg), do: "invalid regex pattern: #{msg}"
   defp format_error(other), do: "regex error: #{inspect(other)}"
 
-  defp count_groups(pattern) do
+  defp compile_and_count_groups(pattern) do
     case Elixir.Regex.compile(pattern) do
       {:error, _} -> {:error, "invalid regex pattern: #{inspect(pattern)}"}
-      {:ok, _} -> {:ok, do_count_parens(pattern, 0)}
+      {:ok, regex} -> {:ok, regex, do_count_parens(pattern, 0)}
     end
   end
 

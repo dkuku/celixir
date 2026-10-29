@@ -164,6 +164,12 @@ defmodule CelixirExtTest do
     test "mixed types" do
       assert eval!(~S|[1, "b", 2, "b"].distinct()|) == [1, "b", 2]
     end
+
+    @tag timeout: 1_000
+    test "scales linearly on large lists" do
+      items = Enum.to_list(1..30_000) ++ Enum.to_list(1..10_000)
+      assert eval!("items.distinct()", %{"items" => items}) == Enum.to_list(1..30_000)
+    end
   end
 
   describe "list.first" do
